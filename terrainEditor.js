@@ -14,7 +14,9 @@
 // collider so what you walk on matches what you see.
 
 import * as THREE from 'three';
-import { bindTerrainPainting } from 'metaverse-terrain';
+import { bindTerrainPainting, TERRAIN_TEXTURE_LAYERS } from 'metaverse-terrain';
+
+const LAYER_LABELS = { sand: 'Sand', grass: 'Grass', rock: 'Rock', snow: 'Snow', water: 'Water' };
 
 export class TerrainEditor {
   constructor({ renderer, camera, controls, terrain, player }) {
@@ -29,6 +31,13 @@ export class TerrainEditor {
     this._dirty = false;
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
+
+    // One shared hidden file input, re-targeted per texture upload.
+    this._file = document.createElement('input');
+    this._file.type = 'file';
+    this._file.accept = 'image/*';
+    this._file.style.display = 'none';
+    document.body.appendChild(this._file);
 
     // Sensible starting brush.
     terrain.setBrushMode('raise');
@@ -71,6 +80,9 @@ export class TerrainEditor {
       (v) => this.terrain.setWaterLevel(v));
     this._addSlider('Texture scale', 2, 24, 1, this.terrain.textureDensity,
       (v) => this.terrain.setTextureDensity(v));
+
+    // Per-layer texture slots (click or drag-and-drop an image).
+    this._addTextures();
 
     // Actions.
     const actions = document.createElement('div');
@@ -125,6 +137,64 @@ export class TerrainEditor {
   _setMode(mode) {
     this.terrain.setBrushMode(mode);
     for (const [m, b] of Object.entries(this._modeButtons)) b.classList.toggle('active', m === mode);
+  }
+
+  _pickFile(onFile) {
+    this._file.value = '';
+    this._file.onchange = () => { const f = this._file.files[0]; if (f) onFile(f); };
+    this._file.click();
+  }
+
+  // ---- texture slots --------------------------------------------------
+  // One slot per terrain layer (sand / grass / rock / snow / water). Click to
+  // pick an image file, or drag-and-drop one onto the slot; the library swaps
+  // that layer's texture and the slot shows a thumbnail of what you dropped.
+  _addTextures() {
+    this._addLabel('Textures');
+    const hint = document.createElement('div');
+    hint.className = 'terrain-hint';
+    hint.textContent = 'Click or drop an image onto a layer to retexture it.';
+    this.panel.appendChild(hint);
+
+    const slots = document.createElement('div');
+    slots.className = 'terrain-slots';
+    for (const layer of TERRAIN_TEXTURE_LAYERS) slots.appendChild(this._makeTextureSlot(layer));
+    this.panel.appendChild(slots);
+  }
+
+  _makeTextureSlot(layer) {
+    const b = document.createElement('button');
+    b.className = 'terrain-slot';
+    b.title = LAYER_LABELS[layer] ?? layer;
+    const tag = document.createElement('span');
+    tag.className = 'terrain-slot-tag';
+    tag.textContent = LAYER_LABELS[layer] ?? layer;
+    b.appendChild(tag);
+
+    b._url = null;
+    const setPreview = (url) => {
+      if (b._url) URL.revokeObjectURL(b._url);
+      b._url = url;
+      b.style.backgroundImage = url ? `url(${url})` : '';
+      b.classList.toggle('filled', !!url);
+    };
+
+    const apply = (file) => {
+      if (!file?.type?.startsWith('image/')) return; // ignore non-images
+      this.terrain.setTerrainTexture(layer, file);
+      setPreview(URL.createObjectURL(file)); // local URL just for the slot thumbnail
+    };
+
+    b.addEventListener('click', () => this._pickFile(apply));
+    b.addEventListener('dragover', (e) => { e.preventDefault(); b.classList.add('drop'); });
+    b.addEventListener('dragleave', () => b.classList.remove('drop'));
+    b.addEventListener('drop', (e) => {
+      e.preventDefault();
+      b.classList.remove('drop');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) apply(file);
+    });
+    return b;
   }
 
   // ---- open / close ---------------------------------------------------

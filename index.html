@@ -92,6 +92,22 @@
       border-radius: 8px; background: #3a5a8a; color: #fff; font: inherit; font-weight: 600;
     }
     .terrain-done:hover { background: #45689c; }
+    .terrain-hint { color: #aeb6c6; font-size: 11px; line-height: 1.4; }
+    .terrain-slots { display: flex; gap: 4px; }
+    .terrain-slot {
+      flex: 1; position: relative; aspect-ratio: 1; cursor: pointer; padding: 0;
+      border: 1px solid #3a3f4e; border-radius: 6px; background: #2a2e3a;
+      background-size: cover; background-position: center; overflow: hidden;
+    }
+    .terrain-slot:hover { border-color: #59617a; }
+    .terrain-slot.filled { border-color: #6f9bd8; }
+    .terrain-slot.drop { border: 2px dashed #8fc0ff; background-color: #34507a; }
+    .terrain-slot-tag {
+      position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 0;
+      font: 600 9px system-ui, sans-serif; color: #e8ecf4; text-align: center;
+      background: rgba(20, 22, 29, 0.6);
+    }
+    .terrain-slot.filled .terrain-slot-tag { background: rgba(58, 90, 138, 0.8); }
     /* Floating avatar editor sidebar (tabbed) */
     .avatar-panel {
       position: fixed; z-index: 20; right: 14px; top: 50%; transform: translateY(-50%);
