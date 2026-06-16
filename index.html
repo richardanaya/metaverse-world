@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="data:," />
-  <title>metaverse-world — avatar walking on terrain</title>
+  <title>Metaverse</title>
   <style>
-    html, body { margin: 0; height: 100%; overflow: hidden; background: #9fb7d5; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #04070c; }
     canvas { display: block; }
     #hud {
       position: fixed; left: 12px; bottom: 12px; pointer-events: none;
@@ -56,6 +56,11 @@
     .edit-pane button.active { background: #3a5a8a; border-color: #6f9bd8; }
     .edit-pane button.danger:hover { background: #a23b39; }
     .edit-pane button.done { margin-top: 2px; background: #313846; }
+    .edit-pane-hint {
+      margin-top: 4px; padding-top: 6px; border-top: 1px solid #3a3f4e;
+      max-width: 200px; color: #aeb6c6; font-size: 11px; line-height: 1.5;
+    }
+    .edit-pane-hint b { color: #dbe2ee; font-weight: 600; }
     /* Floating terrain editor sidebar */
     .terrain-panel {
       position: fixed; z-index: 20; right: 14px; top: 50%; transform: translateY(-50%);
@@ -200,6 +205,298 @@
     .sky-done:hover { background: #45689c; }
   </style>
 
+  <!-- ============================================================= -->
+  <!-- SOVEREIGN OS — command-deck aesthetic (overrides the above).   -->
+  <!-- ============================================================= -->
+  <style>
+    :root {
+      --bg-0:#04070c; --bg-1:#070c14; --bg-2:#0b121c;
+      --line:    rgba(124,176,216,.18);
+      --line-2:  rgba(140,190,230,.42);
+      --text:    #9db1c4;
+      --dim:     #5e7488;
+      --bright:  #e7f1fb;
+      --accent:  #7cb2dd;
+      --accent-2:#bfe1fb;
+      --accent-soft: rgba(124,178,221,.14);
+      --danger:  #d06a5f;
+      --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+      --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+    /* ---- shared panel chrome ---- */
+    .ctx-menu, .edit-pane, .terrain-panel, .avatar-panel, .sky-panel {
+      background:
+        linear-gradient(155deg, rgba(13,21,32,.93), rgba(6,10,16,.95)) padding-box;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      box-shadow: 0 18px 50px rgba(0,0,0,.55), inset 0 0 0 1px rgba(124,176,216,.04),
+                  inset 0 1px 0 rgba(160,200,235,.10);
+      backdrop-filter: blur(7px) saturate(115%);
+      -webkit-backdrop-filter: blur(7px) saturate(115%);
+      color: var(--text);
+      font-family: var(--sans);
+    }
+    /* corner brackets (top-left + bottom-right) */
+    .edit-pane::before, .terrain-panel::before, .avatar-panel::before, .sky-panel::before,
+    .edit-pane::after,  .terrain-panel::after,  .avatar-panel::after,  .sky-panel::after {
+      content:""; position:absolute; width:13px; height:13px; pointer-events:none; opacity:.85;
+    }
+    .edit-pane::before, .terrain-panel::before, .avatar-panel::before, .sky-panel::before {
+      left:-1px; top:-1px; border-left:1px solid var(--accent); border-top:1px solid var(--accent);
+    }
+    .edit-pane::after, .terrain-panel::after, .avatar-panel::after, .sky-panel::after {
+      right:-1px; bottom:-1px; border-right:1px solid var(--accent); border-bottom:1px solid var(--accent);
+    }
+
+    /* ---- titles + section tags ---- */
+    .edit-pane-title, .terrain-panel-title, .avatar-panel-title, .sky-panel-title {
+      font: 600 11px/1.2 var(--mono); text-transform: uppercase; letter-spacing: .2em;
+      color: var(--accent); padding: 1px 0 9px; margin-bottom: 1px;
+      border-bottom: 1px solid var(--line);
+    }
+    .edit-pane-title::before, .terrain-panel-title::before,
+    .avatar-panel-title::before, .sky-panel-title::before {
+      content: "▍ /"; color: var(--accent-2); letter-spacing: 0; margin-right: 1px;
+    }
+    .terrain-section, .avatar-section, .sky-section {
+      font: 600 9.5px var(--mono); text-transform: uppercase; letter-spacing: .2em;
+      color: var(--dim); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-top: 8px;
+    }
+    .terrain-section::before, .avatar-section::before, .sky-section::before {
+      content: "/"; color: var(--accent); margin-right: 3px;
+    }
+
+    /* ---- generic buttons across panels ---- */
+    .edit-pane button, .terrain-panel button, .avatar-panel button, .sky-panel button,
+    .ctx-menu button {
+      font: 600 11px var(--sans); letter-spacing: .07em; text-transform: uppercase;
+      color: var(--text); background: rgba(18,28,40,.55);
+      border: 1px solid var(--line); border-radius: 2px;
+      transition: color .14s ease, border-color .14s ease, background .14s ease, box-shadow .14s ease;
+    }
+    .edit-pane button:hover, .terrain-panel button:hover, .avatar-panel button:hover,
+    .sky-panel button:hover, .ctx-menu button:hover {
+      color: var(--bright); border-color: var(--line-2);
+      background: rgba(30,48,68,.7); box-shadow: 0 0 0 1px rgba(124,178,221,.08);
+    }
+    /* active / primary states get the accent glow */
+    .edit-pane button.active, .terrain-panel .seg button.active, .avatar-tabs button.active {
+      color: var(--accent-2); border-color: var(--accent); background: var(--accent-soft);
+      box-shadow: 0 0 14px rgba(124,178,221,.22), inset 0 0 14px rgba(124,178,221,.07);
+    }
+    .terrain-done, .avatar-done, .sky-done {
+      text-transform: uppercase; letter-spacing: .12em; font-weight: 600;
+      color: var(--accent-2); background: var(--accent-soft); border: 1px solid var(--accent);
+      border-radius: 2px; box-shadow: 0 0 14px rgba(124,178,221,.18), inset 0 0 14px rgba(124,178,221,.06);
+    }
+    .terrain-done:hover, .avatar-done:hover, .sky-done:hover {
+      background: rgba(124,178,221,.22); color: #fff; box-shadow: 0 0 20px rgba(124,178,221,.32);
+    }
+    .edit-pane button.danger:hover, .ctx-menu button.danger:hover {
+      color: #fff; background: rgba(190,70,60,.55); border-color: var(--danger); box-shadow: none;
+    }
+    .edit-pane button.done { background: rgba(14,22,32,.6); }
+    .terrain-reset { width: 100%; margin-top: 6px; }
+
+    /* ---- row labels + numeric readouts ---- */
+    .terrain-row-head, .avatar-row-head, .sky-row-head {
+      font: 10px var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--dim);
+    }
+    .terrain-row-head b, .avatar-row-head b, .sky-row-head b { color: var(--accent-2); font-weight: 600; }
+    .edit-pane-hint, .terrain-hint, .avatar-hint {
+      font: 10px/1.6 var(--mono); color: var(--dim); letter-spacing: .03em;
+      border-top: 1px solid var(--line);
+    }
+    .edit-pane-hint b, .terrain-hint b, .avatar-hint b { color: var(--accent); font-weight: 600; }
+
+    /* ---- sliders: thin track + diamond thumb ---- */
+    .terrain-row input[type=range], .avatar-row input[type=range], .sky-row input[type=range] {
+      -webkit-appearance: none; appearance: none; height: 14px; background: transparent; cursor: pointer;
+    }
+    .terrain-row input[type=range]::-webkit-slider-runnable-track,
+    .avatar-row input[type=range]::-webkit-slider-runnable-track,
+    .sky-row input[type=range]::-webkit-slider-runnable-track {
+      height: 2px; background: linear-gradient(90deg, var(--accent), rgba(124,178,221,.18));
+    }
+    .terrain-row input[type=range]::-moz-range-track,
+    .avatar-row input[type=range]::-moz-range-track,
+    .sky-row input[type=range]::-moz-range-track { height: 2px; background: rgba(124,178,221,.25); }
+    .terrain-row input[type=range]::-webkit-slider-thumb,
+    .avatar-row input[type=range]::-webkit-slider-thumb,
+    .sky-row input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 9px; height: 9px; margin-top: -3.5px; transform: rotate(45deg);
+      background: var(--accent-2); border: 1px solid var(--accent);
+      box-shadow: 0 0 8px rgba(124,178,221,.7);
+    }
+    .terrain-row input[type=range]::-moz-range-thumb,
+    .avatar-row input[type=range]::-moz-range-thumb,
+    .sky-row input[type=range]::-moz-range-thumb {
+      width: 8px; height: 8px; border-radius: 0; background: var(--accent-2); border: 1px solid var(--accent);
+      box-shadow: 0 0 8px rgba(124,178,221,.7);
+    }
+
+    /* ---- texture / material slots ---- */
+    .terrain-slot, .avatar-slot {
+      border: 1px solid var(--line); border-radius: 2px; background: rgba(12,19,28,.7);
+    }
+    .terrain-slot:hover, .avatar-slot:hover { border-color: var(--line-2); }
+    .terrain-slot.filled, .avatar-slot.filled {
+      border-color: var(--accent); box-shadow: 0 0 10px rgba(124,178,221,.25);
+    }
+    .terrain-slot.drop, .avatar-slot.drop {
+      border: 1px dashed var(--accent-2); background-color: rgba(124,178,221,.18);
+    }
+    .terrain-slot-tag, .avatar-slot-tag {
+      font: 600 8.5px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+      background: rgba(5,9,14,.7); color: var(--text);
+    }
+    .terrain-slot.filled .terrain-slot-tag, .avatar-slot.filled .avatar-slot-tag {
+      background: rgba(124,178,221,.28); color: var(--bright);
+    }
+
+    /* ---- avatar groups / cards ---- */
+    .avatar-tabs button, .terrain-panel .seg button, .avatar-presets button {
+      text-transform: uppercase; letter-spacing: .07em; border-radius: 2px;
+    }
+    .avatar-group, .avatar-mat-card { border: 1px solid var(--line); border-radius: 2px; background: rgba(8,13,20,.45); }
+    .avatar-group > summary { font: 600 11px var(--sans); letter-spacing: .05em; color: var(--text); text-transform: uppercase; }
+    .avatar-group[open] > summary { color: var(--accent-2); }
+    .avatar-mat-clear {
+      font: 600 9px var(--mono); text-transform: uppercase; letter-spacing: .08em;
+      border: 1px solid var(--line); border-radius: 2px; background: rgba(18,28,40,.55); color: var(--text);
+    }
+    .avatar-mat-head { font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text); }
+
+    /* scrollbars inside panels */
+    .terrain-panel, .avatar-panel, .sky-panel { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+    .terrain-panel::-webkit-scrollbar, .avatar-panel::-webkit-scrollbar, .sky-panel::-webkit-scrollbar { width: 6px; }
+    .terrain-panel::-webkit-scrollbar-thumb, .avatar-panel::-webkit-scrollbar-thumb, .sky-panel::-webkit-scrollbar-thumb {
+      background: var(--line-2); border-radius: 0;
+    }
+
+    /* ---- context menu ---- */
+    .ctx-menu button { text-transform: none; letter-spacing: .02em; }
+    .ctx-menu button:hover { background: var(--accent-soft); }
+
+    /* ================= in-world chrome ================= */
+    #topbar {
+      position: fixed; inset: 0 0 auto 0; height: 34px; z-index: 15; pointer-events: none;
+      display: flex; align-items: center; gap: 18px; padding: 0 16px 12px;
+      font: 11px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim);
+      background: linear-gradient(180deg, rgba(4,7,12,.96) 0%, rgba(4,7,12,.9) 70%, rgba(4,7,12,0) 100%);
+    }
+    #topbar .wm { color: var(--accent-2); font-weight: 600; letter-spacing: .26em; }
+    #topbar .sep { flex: 1; }
+    #topbar b { color: var(--accent); font-weight: 600; }
+    #topbar .dot { color: #6fd08a; }
+
+    #hud {
+      left: 50%; bottom: 14px; right: auto; transform: translateX(-50%);
+      background: linear-gradient(155deg, rgba(11,18,28,.78), rgba(5,9,14,.82));
+      border: 1px solid var(--line); border-radius: 3px;
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      box-shadow: 0 10px 30px rgba(0,0,0,.5);
+      font: 10.5px var(--mono); letter-spacing: .06em; text-transform: uppercase;
+      color: var(--dim); text-shadow: none; padding: 7px 14px; max-width: min(94vw, 1100px); text-align: center;
+    }
+    #hud b { color: var(--accent); font-weight: 600; }
+
+    /* ================= boot / login screen ================= */
+    #boot {
+      position: fixed; inset: 0; z-index: 100; overflow: hidden;
+      display: grid; grid-template-rows: auto 1fr auto; place-items: stretch;
+      background: radial-gradient(120% 90% at 50% 18%, #0b1726 0%, #060b13 45%, #03060a 100%);
+      color: var(--text); font-family: var(--sans);
+      transition: opacity .7s ease;
+    }
+    #boot.hide { opacity: 0; pointer-events: none; }
+    /* faint grid + scanlines + vignette overlays */
+    #boot::before {
+      content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+      background-image:
+        linear-gradient(rgba(124,178,221,.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(124,178,221,.05) 1px, transparent 1px);
+      background-size: 46px 46px, 46px 46px;
+      mask-image: radial-gradient(120% 80% at 50% 40%, #000 30%, transparent 85%);
+      -webkit-mask-image: radial-gradient(120% 80% at 50% 40%, #000 30%, transparent 85%);
+    }
+    #boot::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .35;
+      background: repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px);
+      animation: scan 7s linear infinite;
+    }
+    @keyframes scan { from { background-position: 0 0; } to { background-position: 0 300px; } }
+
+    .boot-strip {
+      position: relative; z-index: 2; display: flex; align-items: center; gap: 16px;
+      padding: 0 22px; height: 40px;
+      font: 11px var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--dim);
+      border-bottom: 1px solid var(--line);
+    }
+    .boot-strip.bottom { border-bottom: 0; border-top: 1px solid var(--line); justify-content: space-between; }
+    .boot-strip .sep { flex: 1; }
+    .boot-strip b { color: var(--accent); font-weight: 600; }
+
+    .boot-core {
+      position: relative; z-index: 2; align-self: center; justify-self: center;
+      width: min(440px, 88vw); padding: 34px 38px 30px;
+      background: linear-gradient(160deg, rgba(12,20,31,.78), rgba(6,10,16,.85));
+      border: 1px solid var(--line);
+      box-shadow: 0 30px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(160,200,235,.10);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      text-align: center;
+    }
+    /* corner brackets on the auth panel (all four) */
+    .boot-core span.cnr { position: absolute; width: 18px; height: 18px; pointer-events: none; }
+    .boot-core span.tl { left: -1px; top: -1px; border-left: 1px solid var(--accent); border-top: 1px solid var(--accent); }
+    .boot-core span.tr { right: -1px; top: -1px; border-right: 1px solid var(--accent); border-top: 1px solid var(--accent); }
+    .boot-core span.bl { left: -1px; bottom: -1px; border-left: 1px solid var(--accent); border-bottom: 1px solid var(--accent); }
+    .boot-core span.br { right: -1px; bottom: -1px; border-right: 1px solid var(--accent); border-bottom: 1px solid var(--accent); }
+
+
+    .boot-title { font: 600 26px var(--sans); letter-spacing: .42em; color: var(--bright); margin: 0 0 6px; text-indent: .42em; }
+    .boot-sub { font: 10.5px var(--mono); letter-spacing: .26em; text-transform: uppercase; color: var(--accent); margin-bottom: 22px; }
+
+    .boot-field {
+      display: flex; align-items: center; gap: 10px; margin: 0 0 10px;
+      border: 1px solid var(--line); background: rgba(6,11,18,.6); padding: 9px 12px;
+      text-align: left;
+    }
+    .boot-field label { font: 9.5px var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--dim); white-space: nowrap; }
+    .boot-field input {
+      flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--accent-2);
+      font: 12px var(--mono); letter-spacing: .14em;
+    }
+    .boot-field input::placeholder { color: #3f4f60; font-style: italic; opacity: 1; }
+    .boot-field .static { flex: 1; text-align: right; font: 600 12px var(--mono); letter-spacing: .14em; color: var(--accent-2); }
+
+    .boot-log { list-style: none; margin: 16px 0 20px; padding: 0; text-align: left; }
+    .boot-log li {
+      font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
+      padding: 3px 0; opacity: 0; transform: translateX(-4px);
+      animation: logIn .4s ease forwards;
+    }
+    .boot-log li::before { content: "› "; color: var(--accent); }
+    .boot-log li.ok::after { content: " ✓"; color: #6fd08a; }
+    .boot-log li:nth-child(1){animation-delay:.2s} .boot-log li:nth-child(2){animation-delay:.7s}
+    .boot-log li:nth-child(3){animation-delay:1.2s} .boot-log li:nth-child(4){animation-delay:1.7s}
+    .boot-log li:nth-child(5){animation-delay:2.2s}
+    @keyframes logIn { to { opacity: 1; transform: none; } }
+
+    #boot-enter {
+      width: 100%; padding: 13px 0; cursor: pointer;
+      font: 600 12px var(--sans); letter-spacing: .26em; text-transform: uppercase;
+      color: var(--accent-2); background: var(--accent-soft); border: 1px solid var(--accent);
+      box-shadow: 0 0 18px rgba(124,178,221,.2), inset 0 0 18px rgba(124,178,221,.06);
+      transition: background .16s ease, color .16s ease, box-shadow .16s ease;
+    }
+    #boot-enter:hover:not(:disabled) { background: rgba(124,178,221,.26); color: #fff; box-shadow: 0 0 26px rgba(124,178,221,.4); }
+    #boot-enter:disabled { color: var(--dim); border-color: var(--line); background: rgba(8,13,20,.5); cursor: progress;
+      box-shadow: none; animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
+  </style>
+
   <!-- three.js, the avatar, and the terrain — all from the jsDelivr CDN via an
        import map. three is a peer dependency both libraries share. -->
   <script type="importmap">
@@ -215,11 +512,99 @@
   </script>
 </head>
 <body>
-  <div id="loading">Loading world…</div>
+  <!-- in-world top status strip -->
+  <div id="topbar">
+    <span class="wm">METAVERSE</span>
+    <span>VER 0.1.0</span>
+    <span class="sep"></span>
+    <span>SRVC <b>1 ONLINE</b></span>
+    <span>SYS TIME <b data-clock>--:--:--</b></span>
+    <span><span class="dot">●</span> CONNECTION STATE NOMINAL</span>
+  </div>
+
   <div id="hud">
     <b>WASD</b> move · <b>Shift</b> run · <b>E</b> jump (hold to fly) · <b>X</b> crouch · <b>C</b> descend ·
-    drag to orbit · <b>Alt-click</b> to focus camera on a point · <b>right-click</b> block / terrain / avatar / sky to edit · <b>Esc</b> recenters / exits
+    drag to orbit · <b>Alt-click</b> focus camera · <b>right-click</b> block / terrain / avatar / sky to edit · <b>Esc</b> recenter / exit
+    <br><b>Gamepad</b> L-stick move/turn · R-stick camera · <b>R3</b> recenter · <b>A</b> jump (hold to fly) · <b>B</b> crouch · <b>Y</b> toggle fly · <b>RB</b> run
   </div>
+
+  <!-- boot / login screen -->
+  <div id="boot">
+    <div class="boot-strip top">
+      <span>METAVERSE</span><span>SECURE TERMINAL</span>
+      <span class="sep"></span>
+      <span>NODE <b id="boot-node">—</b></span><span>SYS TIME <b data-clock>--:--:--</b></span>
+    </div>
+
+    <div class="boot-core">
+      <span class="cnr tl"></span><span class="cnr tr"></span><span class="cnr bl"></span><span class="cnr br"></span>
+
+      <h1 class="boot-title">METAVERSE</h1>
+      <div class="boot-sub">Build · Sculpt · Inhabit</div>
+
+      <div class="boot-field">
+        <label>Name</label>
+        <input id="boot-operator" placeholder="Prometheus" spellcheck="false" autocomplete="off" />
+      </div>
+      <div class="boot-field">
+        <label>Connection Site</label>
+        <span class="static">Local</span>
+      </div>
+
+      <ul class="boot-log">
+        <li class="ok">Subspace link established</li>
+        <li class="ok">Archive index mounted</li>
+        <li class="ok">Cognitive core warm</li>
+        <li class="ok">Holocene interface ready</li>
+        <li id="boot-world">Loading world geometry…</li>
+      </ul>
+
+      <button id="boot-enter" disabled>Initializing…</button>
+    </div>
+
+    <div class="boot-strip bottom">
+      <span>ENCRYPTED CHANNEL · AES-512</span>
+      <span>PING <b>0.3 MS</b></span>
+    </div>
+  </div>
+
+  <!-- Boot-screen chrome: live clocks + ENTER handoff (runs immediately, before
+       the heavy world module finishes loading). -->
+  <script>
+    (function () {
+      const pad = (n) => String(n).padStart(2, '0');
+      const tick = () => {
+        const t = new Date();
+        const s = `${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
+        document.querySelectorAll('[data-clock]').forEach((el) => { el.textContent = s; });
+      };
+      tick(); setInterval(tick, 1000);
+
+      // Show the real page origin as the connected node.
+      const node = document.getElementById('boot-node');
+      if (node) node.textContent = (location.origin && location.origin !== 'null') ? location.origin : 'LOCAL';
+
+      const boot = document.getElementById('boot');
+      const enter = document.getElementById('boot-enter');
+      const dismiss = () => {
+        if (enter.disabled) return;
+        boot.classList.add('hide');
+        setTimeout(() => boot.remove(), 800);
+      };
+      enter.addEventListener('click', dismiss);
+      document.getElementById('boot-operator')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') dismiss();
+      });
+
+      // The world module calls this once everything has loaded.
+      window.__bootReady = () => {
+        const w = document.getElementById('boot-world');
+        if (w) { w.textContent = 'World geometry resolved'; w.classList.add('ok'); }
+        enter.disabled = false;
+        enter.textContent = 'Enter ▸';
+      };
+    })();
+  </script>
 
   <script type="module">
     import * as THREE from 'three';
@@ -385,9 +770,8 @@
       renderer.render(scene, camera);
     });
 
-    const loading = document.getElementById('loading');
-    loading.style.opacity = '0';
-    setTimeout(() => loading.remove(), 400);
+    // Everything is up — let the boot screen enable its ENTER button.
+    window.__bootReady?.();
   </script>
 </body>
 </html>

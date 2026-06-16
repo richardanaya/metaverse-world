@@ -28,6 +28,7 @@ export class TerrainEditor {
 
     this.active = false;
     this._binding = null;
+    this._mode = null;            // active brush mode, or null = no brush
     this._dirty = false;
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -39,10 +40,11 @@ export class TerrainEditor {
     this._file.style.display = 'none';
     document.body.appendChild(this._file);
 
-    // Sensible starting brush.
-    terrain.setBrushMode('raise');
+    // Default brush size/strength, but no active mode yet — the brush only
+    // appears once Raise / Lower / Flatten is chosen.
     terrain.setBrushRadius(14);
     terrain.setBrushStrength(0.6);
+    if (terrain.brushCursor) terrain.brushCursor.visible = false;
 
     this._buildPanel();
   }
@@ -84,6 +86,10 @@ export class TerrainEditor {
     // Per-layer texture slots (click or drag-and-drop an image).
     this._addTextures();
 
+    // World physics (Rapier) — gravity, locomotion + the character controller's
+    // slope limit. Tweaks apply live to the player controller.
+    this._addPhysics();
+
     // Actions.
     const actions = document.createElement('div');
     actions.className = 'terrain-actions';
@@ -105,7 +111,7 @@ export class TerrainEditor {
     this.panel.appendChild(done);
 
     document.body.appendChild(this.panel);
-    this._setMode('raise');
+    // No brush mode active to start — buttons are all off until clicked.
   }
 
   _addLabel(text) {
@@ -115,6 +121,8 @@ export class TerrainEditor {
     this.panel.appendChild(el);
   }
 
+  // Returns a handle whose `set(v)` updates both the slider and its readout
+  // (used by "Reset physics" to push new values back into the UI).
   _addSlider(label, min, max, step, value, onInput) {
     const row = document.createElement('label');
     row.className = 'terrain-row';
@@ -132,11 +140,39 @@ export class TerrainEditor {
     head.append(cap, val);
     row.append(head, input);
     this.panel.appendChild(row);
+    return { input, set: (v) => { input.value = v; val.textContent = fmt(v); } };
   }
 
+  // Brush modes toggle: clicking the active one turns the brush off (no brush
+  // shown until Raise / Lower / Flatten is selected again).
   _setMode(mode) {
-    this.terrain.setBrushMode(mode);
-    for (const [m, b] of Object.entries(this._modeButtons)) b.classList.toggle('active', m === mode);
+    const next = this._mode === mode ? null : mode;
+    this._mode = next;
+    if (next) {
+      this.terrain.setBrushMode(next);
+      if (this.active) this._bindPaint();
+    } else {
+      this._unbindPaint();
+    }
+    for (const [m, b] of Object.entries(this._modeButtons)) b.classList.toggle('active', m === next);
+  }
+
+  // Lazily wire up brush painting (only while a mode is active + editor open).
+  _bindPaint() {
+    if (this._binding) return;
+    this._binding = bindTerrainPainting(this.terrain, {
+      domElement: this.dom,
+      camera: this.camera,
+      raycaster: this.raycaster,
+      pointer: this.pointer,
+      setControlsEnabled: (on) => { this.orbit.enabled = on; },
+    });
+  }
+
+  _unbindPaint() {
+    this._binding?.unbind();
+    this._binding = null;
+    if (this.terrain.brushCursor) this.terrain.brushCursor.visible = false;
   }
 
   _pickFile(onFile) {
@@ -162,6 +198,40 @@ export class TerrainEditor {
     this.panel.appendChild(slots);
   }
 
+  // Resolve a CSS-usable preview URL for whatever the terrain holds for a layer:
+  // either the original source URL (string) or a loaded THREE.Texture.
+  _texturePreviewUrl(tex) {
+    if (!tex) return null;
+    if (typeof tex === 'string') return tex;
+    if (tex.isTexture) return tex.userData?.objectUrl || tex.image?.currentSrc || tex.image?.src || null;
+    return null;
+  }
+
+  // ---- world physics (Rapier) -----------------------------------------
+  _addPhysics() {
+    const p = this.player;
+    if (!p) return;
+    this._addLabel('Physics');
+    const sync = [];
+    const add = (label, min, max, step, get, set) => {
+      const c = this._addSlider(label, min, max, step, get(), set);
+      sync.push(() => c.set(get()));
+    };
+    // Gravity is shown as a positive magnitude (world is -Y).
+    add('Gravity', 4, 60, 1, () => -p.gravity, (v) => { p.gravity = -v; });
+    add('Walk speed', 0.5, 8, 0.1, () => p.walkSpeed, (v) => { p.walkSpeed = v; });
+    add('Run speed', 1, 14, 0.1, () => p.runSpeed, (v) => { p.runSpeed = v; });
+    add('Jump height', 0.2, 6, 0.1, () => p.jumpHeight, (v) => { p.jumpHeight = v; });
+    add('Fly speed', 1, 16, 0.1, () => p.flySpeed, (v) => { p.flySpeed = v; });
+    add('Max climb °', 10, 85, 1, () => p.maxClimbAngle, (v) => p.setMaxClimbAngle(v));
+
+    const reset = document.createElement('button');
+    reset.className = 'terrain-reset';
+    reset.textContent = 'Reset physics';
+    reset.addEventListener('click', () => { p.resetPhysics(); for (const s of sync) s(); });
+    this.panel.appendChild(reset);
+  }
+
   _makeTextureSlot(layer) {
     const b = document.createElement('button');
     b.className = 'terrain-slot';
@@ -171,18 +241,24 @@ export class TerrainEditor {
     tag.textContent = LAYER_LABELS[layer] ?? layer;
     b.appendChild(tag);
 
-    b._url = null;
-    const setPreview = (url) => {
-      if (b._url) URL.revokeObjectURL(b._url);
-      b._url = url;
-      b.style.backgroundImage = url ? `url(${url})` : '';
+    // `owned` URLs are object URLs we created and must revoke; the CDN/default
+    // URLs are not ours to revoke.
+    b._objUrl = null;
+    const show = (url, owned) => {
+      if (b._objUrl) URL.revokeObjectURL(b._objUrl);
+      b._objUrl = owned ? url : null;
+      b.style.backgroundImage = url ? `url("${url}")` : '';
       b.classList.toggle('filled', !!url);
     };
+
+    // Seed the slot with the texture the terrain is already using for this layer.
+    const existing = this._texturePreviewUrl(this.terrain.textures?.[layer]);
+    if (existing) show(existing, false);
 
     const apply = (file) => {
       if (!file?.type?.startsWith('image/')) return; // ignore non-images
       this.terrain.setTerrainTexture(layer, file);
-      setPreview(URL.createObjectURL(file)); // local URL just for the slot thumbnail
+      show(URL.createObjectURL(file), true); // local URL just for the slot thumbnail
     };
 
     b.addEventListener('click', () => this._pickFile(apply));
@@ -212,13 +288,8 @@ export class TerrainEditor {
     this._prevOnChange = this.terrain.onHeightmapChange;
     this.terrain.onHeightmapChange = () => this._markDirty();
 
-    this._binding = bindTerrainPainting(this.terrain, {
-      domElement: this.dom,
-      camera: this.camera,
-      raycaster: this.raycaster,
-      pointer: this.pointer,
-      setControlsEnabled: (on) => { this.orbit.enabled = on; },
-    });
+    // Only wire painting if a brush mode is already active (otherwise no brush).
+    if (this._mode) this._bindPaint();
     // After a paint stroke releases, refresh the physics collider once.
     this._onUp = () => this._flushCollider();
     this.dom.addEventListener('pointerup', this._onUp);
@@ -229,12 +300,13 @@ export class TerrainEditor {
     if (!this.active) return;
     this.active = false;
     this.panel.style.display = 'none';
-    this._binding?.unbind();
-    this._binding = null;
+    this._unbindPaint();
+    // Reset to "no brush" so reopening starts clean.
+    this._mode = null;
+    for (const b of Object.values(this._modeButtons)) b.classList.remove('active');
     this.dom.removeEventListener('pointerup', this._onUp);
     this.dom.removeEventListener('pointercancel', this._onUp);
     this.terrain.onHeightmapChange = this._prevOnChange ?? null;
-    if (this.terrain.brushCursor) this.terrain.brushCursor.visible = false;
     if (this._prevMouseButtons) this.orbit.mouseButtons = this._prevMouseButtons;
     this.orbit.enabled = true;
     this._flushCollider();

@@ -18,6 +18,11 @@ import RAPIER from '@dimforge/rapier3d-compat';
 
 const PALETTE = [0xe6584d, 0xf2a83b, 0x4db6ac, 0x7e6bd6, 0x5c8fde, 0x8bc34a];
 
+// Scratch objects for decomposing a mesh's world matrix when syncing physics.
+const _wp = new THREE.Vector3();
+const _wq = new THREE.Quaternion();
+const _ws = new THREE.Vector3();
+
 export class BlockSummoner {
   constructor({ scene, player, max = 200 }) {
     this.scene = scene;
@@ -70,13 +75,31 @@ export class BlockSummoner {
   }
 
   // Push a block's mesh transform (moved/rotated/scaled by the gizmo) onto its
-  // physics body + collider so collisions match what's drawn.
+  // physics body + collider so collisions match what's drawn. Reads the *world*
+  // transform so it works whether the mesh sits in the scene directly or is
+  // temporarily parented under the editor's selection pivot.
   syncPhysics(block) {
     const m = block.mesh;
-    block.body.setTranslation({ x: m.position.x, y: m.position.y, z: m.position.z }, true);
-    block.body.setRotation({ x: m.quaternion.x, y: m.quaternion.y, z: m.quaternion.z, w: m.quaternion.w }, true);
+    m.updateWorldMatrix(true, false);
+    m.matrixWorld.decompose(_wp, _wq, _ws);
+    block.body.setTranslation({ x: _wp.x, y: _wp.y, z: _wp.z }, true);
+    block.body.setRotation({ x: _wq.x, y: _wq.y, z: _wq.z, w: _wq.w }, true);
     const h = this.size / 2;
-    block.collider.setHalfExtents({ x: h * m.scale.x, y: h * m.scale.y, z: h * m.scale.z });
+    block.collider.setHalfExtents({ x: h * Math.abs(_ws.x), y: h * Math.abs(_ws.y), z: h * Math.abs(_ws.z) });
+  }
+
+  // Duplicate a block: same world transform + color, brand-new physics body.
+  cloneBlock(src) {
+    const m = src.mesh;
+    m.updateWorldMatrix(true, false);
+    m.matrixWorld.decompose(_wp, _wq, _ws);
+    const block = this.create(_wp.x, _wp.y, _wp.z);
+    block.mesh.quaternion.copy(_wq);
+    block.mesh.scale.copy(_ws);
+    block.mesh.material.color.copy(m.material.color);
+    block.mesh.updateMatrixWorld(true);
+    this.syncPhysics(block);
+    return block;
   }
 
   remove(block) {
