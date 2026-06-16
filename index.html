@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:," />
+  <title>metaverse-world — avatar walking on terrain</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #9fb7d5; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 12px; bottom: 12px; pointer-events: none;
+      font: 13px system-ui, sans-serif; color: #eef2f8;
+      background: rgba(20, 22, 29, 0.62); padding: 8px 12px; border-radius: 8px;
+      text-shadow: 0 1px 2px rgba(0,0,0,.5);
+    }
+    #hud b { color: #fff; }
+    #loading {
+      position: fixed; inset: 0; display: grid; place-items: center;
+      font: 15px system-ui, sans-serif; color: #1a1d24;
+      background: #9fb7d5; transition: opacity .4s ease;
+    }
+    /* Right-click context menu */
+    .ctx-menu {
+      position: fixed; z-index: 20; min-width: 150px; padding: 4px;
+      background: rgba(28, 31, 40, 0.96); border: 1px solid #3a3f4e;
+      border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+      font: 13px system-ui, sans-serif;
+    }
+    .ctx-menu button {
+      display: block; width: 100%; text-align: left; cursor: pointer;
+      padding: 7px 10px; border: 0; border-radius: 5px;
+      background: transparent; color: #e8ecf4; font: inherit;
+    }
+    .ctx-menu button:hover { background: #3a5a8a; }
+    .ctx-menu button.danger:hover { background: #a23b39; }
+    /* Left-docked edit pane (shown while a block is in edit mode) */
+    .edit-pane {
+      position: fixed; z-index: 20; left: 14px; top: 50%; transform: translateY(-50%);
+      display: flex; flex-direction: column; gap: 6px; padding: 10px;
+      min-width: 132px;
+      background: rgba(28, 31, 40, 0.92); border: 1px solid #3a3f4e;
+      border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+      font: 13px system-ui, sans-serif;
+    }
+    .edit-pane-title {
+      color: #aeb6c6; font-size: 11px; text-transform: uppercase;
+      letter-spacing: .08em; padding: 0 2px 4px; border-bottom: 1px solid #3a3f4e;
+    }
+    .edit-pane button {
+      cursor: pointer; text-align: left; padding: 8px 12px; border: 1px solid transparent;
+      border-radius: 8px; background: #2a2e3a; color: #e8ecf4; font: inherit;
+      transition: background .12s ease, border-color .12s ease;
+    }
+    .edit-pane button:hover { background: #3a4150; }
+    .edit-pane button.active { background: #3a5a8a; border-color: #6f9bd8; }
+    .edit-pane button.danger:hover { background: #a23b39; }
+    .edit-pane button.done { margin-top: 2px; background: #313846; }
+    /* Floating terrain editor sidebar */
+    .terrain-panel {
+      position: fixed; z-index: 20; right: 14px; top: 50%; transform: translateY(-50%);
+      display: flex; flex-direction: column; gap: 8px; padding: 14px; width: 210px;
+      max-height: 86vh; overflow-y: auto;
+      background: rgba(28, 31, 40, 0.94); border: 1px solid #3a3f4e;
+      border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+      font: 13px system-ui, sans-serif; color: #e8ecf4;
+    }
+    .terrain-panel-title { font-size: 15px; font-weight: 600; }
+    .terrain-section {
+      margin-top: 4px; color: #aeb6c6; font-size: 11px; text-transform: uppercase;
+      letter-spacing: .08em; border-bottom: 1px solid #3a3f4e; padding-bottom: 3px;
+    }
+    .terrain-panel .seg { display: flex; gap: 4px; }
+    .terrain-panel .seg button {
+      flex: 1; cursor: pointer; padding: 7px 0; border: 1px solid transparent;
+      border-radius: 7px; background: #2a2e3a; color: #e8ecf4; font: inherit;
+    }
+    .terrain-panel .seg button:hover { background: #3a4150; }
+    .terrain-panel .seg button.active { background: #3a5a8a; border-color: #6f9bd8; }
+    .terrain-row { display: flex; flex-direction: column; gap: 3px; }
+    .terrain-row-head { display: flex; justify-content: space-between; color: #c9ced9; }
+    .terrain-row-head b { color: #fff; font-weight: 600; }
+    .terrain-row input[type=range] { width: 100%; accent-color: #6f9bd8; }
+    .terrain-actions { display: flex; gap: 4px; margin-top: 4px; }
+    .terrain-actions button {
+      flex: 1; cursor: pointer; padding: 7px 0; border: 1px solid transparent;
+      border-radius: 7px; background: #2a2e3a; color: #e8ecf4; font: inherit;
+    }
+    .terrain-actions button:hover { background: #3a4150; }
+    .terrain-done {
+      margin-top: 4px; cursor: pointer; padding: 8px 0; border: 1px solid #6f9bd8;
+      border-radius: 8px; background: #3a5a8a; color: #fff; font: inherit; font-weight: 600;
+    }
+    .terrain-done:hover { background: #45689c; }
+    /* Floating avatar editor sidebar (tabbed) */
+    .avatar-panel {
+      position: fixed; z-index: 20; right: 14px; top: 50%; transform: translateY(-50%);
+      display: flex; flex-direction: column; gap: 8px; padding: 14px; width: 244px;
+      max-height: 88vh; overflow-y: auto;
+      background: rgba(28, 31, 40, 0.95); border: 1px solid #3a3f4e;
+      border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+      font: 13px system-ui, sans-serif; color: #e8ecf4;
+    }
+    .avatar-panel-title { font-size: 15px; font-weight: 600; }
+    .avatar-tabs { display: flex; gap: 4px; }
+    .avatar-tabs button {
+      flex: 1; cursor: pointer; padding: 7px 0; border: 1px solid transparent;
+      border-radius: 7px; background: #2a2e3a; color: #cfd5e1; font: inherit;
+    }
+    .avatar-tabs button:hover { background: #3a4150; }
+    .avatar-tabs button.active { background: #3a5a8a; border-color: #6f9bd8; color: #fff; }
+    .avatar-pane { display: flex; flex-direction: column; gap: 6px; }
+    .avatar-presets { display: flex; gap: 4px; }
+    .avatar-presets button {
+      flex: 1; cursor: pointer; padding: 6px 0; border: 1px solid transparent;
+      border-radius: 7px; background: #2a2e3a; color: #e8ecf4; font: inherit;
+    }
+    .avatar-presets button:hover { background: #3a4150; }
+    .avatar-presets .avatar-reset { background: #313846; }
+    .avatar-group { border: 1px solid #343a48; border-radius: 8px; padding: 2px 8px; }
+    .avatar-group > summary {
+      cursor: pointer; list-style: revert; padding: 6px 2px; color: #cfd5e1;
+      font-weight: 600; user-select: none;
+    }
+    .avatar-group[open] > summary { color: #fff; }
+    .avatar-section {
+      margin-top: 6px; color: #aeb6c6; font-size: 11px; text-transform: uppercase;
+      letter-spacing: .08em; border-bottom: 1px solid #3a3f4e; padding-bottom: 3px;
+    }
+    .avatar-row { display: flex; flex-direction: column; gap: 2px; padding: 3px 0; }
+    .avatar-row-head { display: flex; justify-content: space-between; color: #c9ced9; }
+    .avatar-row-head b { color: #fff; font-weight: 600; }
+    .avatar-row input[type=range] { width: 100%; accent-color: #6f9bd8; }
+    .avatar-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
+    .avatar-mat-card { border: 1px solid #343a48; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .avatar-mat-head { display: flex; justify-content: space-between; align-items: center; }
+    .avatar-mat-clear {
+      cursor: pointer; font-size: 11px; padding: 3px 8px; border: 1px solid #3a3f4e;
+      border-radius: 6px; background: #2a2e3a; color: #cfd5e1;
+    }
+    .avatar-hint { color: #aeb6c6; font-size: 11px; line-height: 1.4; }
+    .avatar-slots { display: flex; gap: 4px; }
+    .avatar-slot {
+      flex: 1; position: relative; aspect-ratio: 1; cursor: pointer; padding: 0;
+      border: 1px solid #3a3f4e; border-radius: 6px; background: #2a2e3a;
+      background-size: cover; background-position: center; overflow: hidden;
+    }
+    .avatar-slot:hover { border-color: #59617a; }
+    .avatar-slot.filled { border-color: #6f9bd8; }
+    .avatar-slot.drop { border: 2px dashed #8fc0ff; background-color: #34507a; }
+    .avatar-slot-tag {
+      position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 0;
+      font: 600 10px system-ui, sans-serif; color: #e8ecf4; text-align: center;
+      background: rgba(20, 22, 29, 0.6);
+    }
+    .avatar-slot.filled .avatar-slot-tag { background: rgba(58, 90, 138, 0.8); }
+    .avatar-done {
+      margin-top: 4px; cursor: pointer; padding: 8px 0; border: 1px solid #6f9bd8;
+      border-radius: 8px; background: #3a5a8a; color: #fff; font: inherit; font-weight: 600;
+    }
+    .avatar-done:hover { background: #45689c; }
+    /* Floating sky editor sidebar */
+    .sky-panel {
+      position: fixed; z-index: 20; right: 14px; top: 50%; transform: translateY(-50%);
+      display: flex; flex-direction: column; gap: 8px; padding: 14px; width: 210px;
+      max-height: 86vh; overflow-y: auto;
+      background: rgba(28, 31, 40, 0.94); border: 1px solid #3a3f4e;
+      border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+      font: 13px system-ui, sans-serif; color: #e8ecf4;
+    }
+    .sky-panel-title { font-size: 15px; font-weight: 600; }
+    .sky-section {
+      margin-top: 4px; color: #aeb6c6; font-size: 11px; text-transform: uppercase;
+      letter-spacing: .08em; border-bottom: 1px solid #3a3f4e; padding-bottom: 3px;
+    }
+    .sky-row { display: flex; flex-direction: column; gap: 3px; }
+    .sky-row-head { display: flex; justify-content: space-between; color: #c9ced9; }
+    .sky-row-head b { color: #fff; font-weight: 600; }
+    .sky-row input[type=range] { width: 100%; accent-color: #6f9bd8; }
+    .sky-done {
+      margin-top: 4px; cursor: pointer; padding: 8px 0; border: 1px solid #6f9bd8;
+      border-radius: 8px; background: #3a5a8a; color: #fff; font: inherit; font-weight: 600;
+    }
+    .sky-done:hover { background: #45689c; }
+  </style>
+
+  <!-- three.js, the avatar, and the terrain — all from the jsDelivr CDN via an
+       import map. three is a peer dependency both libraries share. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
+      "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar/index.js",
+      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.1.1/index.js",
+      "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="loading">Loading world…</div>
+  <div id="hud">
+    <b>WASD</b> move · <b>Shift</b> run · <b>E</b> jump (hold to fly) · <b>X</b> crouch · <b>C</b> descend ·
+    drag to orbit · <b>Alt-click</b> to focus camera on a point · <b>right-click</b> block / terrain / avatar / sky to edit · <b>Esc</b> recenters / exits
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { Sky } from 'three/addons/objects/Sky.js';
+    import { Avatar } from 'metaverse-avatar';
+    import { TerrainRegion } from 'metaverse-terrain';
+    import { PlayerController } from './playerController.js';
+    import { BlockSummoner } from './blocks.js';
+    import { WorldEditor } from './worldEditor.js';
+    import { TerrainEditor } from './terrainEditor.js';
+    import { AvatarEditor } from './avatarEditor.js';
+    import { SkyEditor } from './skyEditor.js';
+
+    // CDN-hosted assets that the libraries themselves load (mesh parts, skin
+    // textures, terrain layer PNGs).
+    const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar/models/';
+    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.1.1/texture';
+
+    // ---- renderer / scene -------------------------------------------------
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(devicePixelRatio);
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // the Sky shader expects tone mapping
+    renderer.toneMappingExposure = 0.6;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x9fb7d5);
+    scene.fog = new THREE.Fog(0x9fb7d5, 300, 700);
+
+    // Neutral studio environment so the avatar's metallic/roughness materials
+    // have something to reflect (metals render near-black without one).
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 900);
+    camera.position.set(40, 40, 60);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // ---- lights -----------------------------------------------------------
+    scene.add(new THREE.HemisphereLight(0xc8d4ff, 0x4a4636, 1.1));
+    const sun = new THREE.DirectionalLight(0xfff2e0, 2.4);
+    sun.position.set(120, 180, 80);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.near = 10;
+    sun.shadow.camera.far = 500;
+    sun.shadow.camera.left = sun.shadow.camera.bottom = -160;
+    sun.shadow.camera.right = sun.shadow.camera.top = 160;
+    scene.add(sun);
+
+    // ---- sky (Preetham atmospheric scattering skydome) --------------------
+    // Scaled to sit inside the camera's far plane and recentered on the camera
+    // each frame, so it always renders behind the world as an infinite sky.
+    const sky = new Sky();
+    sky.scale.setScalar(450);
+    scene.add(sky);
+    {
+      const u = sky.material.uniforms;
+      u.turbidity.value = 8;
+      u.rayleigh.value = 2.2;
+      u.mieCoefficient.value = 0.005;
+      u.mieDirectionalG.value = 0.8;
+      u.sunPosition.value.copy(sun.position).normalize(); // align sky sun with the light
+    }
+
+    // ---- terrain ----------------------------------------------------------
+    const textures = {
+      sand: `${TEXTURE_BASE}/terrain-sand.png`,
+      grass: `${TEXTURE_BASE}/terrain-grass.png`,
+      rock: `${TEXTURE_BASE}/terrain-rock.png`,
+      snow: `${TEXTURE_BASE}/terrain-snow.png`,
+      water: `${TEXTURE_BASE}/terrain-water.png`,
+    };
+    const terrain = new TerrainRegion({
+      textures,
+      regionSize: 256,
+      seed: 42,
+      textureDensity: 20, // default texture scale
+      addBrushCursor: true, // brush ring preview while sculpting in the terrain editor
+      // Height range (-12..52) and water level (28) use the library defaults, so
+      // the lowlands flood and you get visible water around the hills.
+    });
+    terrain.terrainMesh.receiveShadow = true;
+    // Kill the terrain's specular sheen — make the surface fully matte.
+    for (const mat of [].concat(terrain.terrainMesh.material)) {
+      if ('roughness' in mat) mat.roughness = 1.0;
+      if ('metalness' in mat) mat.metalness = 0.0;
+      mat.needsUpdate = true;
+    }
+    scene.add(terrain.group);
+
+    // ---- avatar -----------------------------------------------------------
+    const avatar = await new Avatar().load(AVATAR_MODELS); // ~1.8 m, unscaled
+    avatar.group.rotation.y = -Math.PI / 2; // face +Z, the controller's forward
+    avatar.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    scene.add(avatar.group);
+    avatar.setBlinking(true);
+
+    // ---- player controller (walk/run/jump/fly + terrain grounding) --------
+    const player = new PlayerController({ avatar, terrain, camera, controls });
+    await player.start();
+
+    // Block placement shares the controller's physics world, so blocks are
+    // instantly solid to the character capsule.
+    const blocks = new BlockSummoner({ scene, player });
+
+    // Terrain sculpting (raise/lower/flatten brushes + settings sidebar). It
+    // rebuilds the controller's terrain collider after each stroke.
+    const terrainEditor = new TerrainEditor({ renderer, camera, controls, terrain, player });
+
+    // Avatar customization (shape sliders + textures/materials, two tabs).
+    const avatarEditor = new AvatarEditor({ avatar });
+
+    // Sky tweaking (sun direction + atmospheric scattering). Moves `sun` so the
+    // light follows the sky's sun.
+    const skyEditor = new SkyEditor({ sky, light: sun, renderer });
+
+    // Right-click world editing: blocks, terrain, avatar, or sky.
+    const editor = new WorldEditor({
+      renderer, scene, camera, controls, terrain, blocks, avatar,
+      terrainEditor, avatarEditor, skyEditor,
+    });
+
+    // ---- alt-click camera focus -------------------------------------------
+    // Alt + left-click sets the orbit pivot to the clicked world point (terrain
+    // or a block) and suspends the avatar-chase so you can orbit around it.
+    // Escape recenters the camera back on the avatar.
+    {
+      const ray = new THREE.Raycaster();
+      const ndc = new THREE.Vector2();
+      renderer.domElement.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || !e.altKey) return;
+        ndc.x = (e.clientX / innerWidth) * 2 - 1;
+        ndc.y = -(e.clientY / innerHeight) * 2 + 1;
+        ray.setFromCamera(ndc, camera);
+        // recursive: the avatar is a rig of skinned meshes under one group.
+        const hit = ray.intersectObjects([terrain.terrainMesh, avatar.group, ...blocks.meshes()], true)[0];
+        if (hit) player.setFocusPoint(hit.point);
+      });
+      addEventListener('keydown', (e) => { if (e.key === 'Escape') player.clearFocus(); });
+    }
+
+    // ---- loop -------------------------------------------------------------
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const dt = clock.getDelta();
+      terrain.update(clock.elapsedTime); // animate the water
+      avatar.update(dt);                 // pose, physics, blink, look-at
+      player.update(dt);                 // movement, grounding, chase camera
+      sky.position.copy(camera.position); // keep the skydome centered on the camera
+      renderer.render(scene, camera);
+    });
+
+    const loading = document.getElementById('loading');
+    loading.style.opacity = '0';
+    setTimeout(() => loading.remove(), 400);
+  </script>
+</body>
+</html>
