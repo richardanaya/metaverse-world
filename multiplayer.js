@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import { Avatar, initGltfAnim, getGltfClip } from 'metaverse-avatar';
+import { resolveAgentName } from './agentName.js';
 
 const CONNECTION_PREFIX = 'mv1:';
 const SYNC_INTERVAL = 1 / 20;
@@ -83,7 +84,7 @@ export class MultiplayerManager {
     this.onStatus = onStatus ?? (() => {});
 
     this.localId = crypto.randomUUID();
-    this.localName = 'Player';
+    this.localName = resolveAgentName();
     this.isHost = false;
     this.peers = new Map();         // peerId -> { pc, dc, name, playerId, isPending }
     this.remotes = new Map();       // playerId -> { avatar, clips, pos, yaw, anim, name }
@@ -96,10 +97,11 @@ export class MultiplayerManager {
     this._buildPanel();
   }
 
-  setLocalName(name) { this.localName = (name || 'Player').trim() || 'Player'; }
+  setLocalName(name) { this.localName = resolveAgentName(name); }
 
   open() { this._open = true; this.panel.style.display = 'flex'; }
   close() { this._open = false; this.panel.style.display = 'none'; }
+  isOpen() { return this._open; }
   toggle() { this._open ? this.close() : this.open(); }
 
   get connectedCount() { return this.peers.size; }
@@ -285,7 +287,7 @@ export class MultiplayerManager {
     try { msg = JSON.parse(raw); } catch { return; }
 
     if (msg.t === 'hello') {
-      fromPeer.name = msg.name || 'Guest';
+      fromPeer.name = resolveAgentName(msg.name);
       fromPeer.playerId = msg.id;
       await this._spawnRemote(msg.id, fromPeer.name);
       this._updatePeerList();

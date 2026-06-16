@@ -430,6 +430,34 @@
       box-shadow: 0 0 12px rgba(124,178,221,.25);
     }
     .connect-panel button:disabled { opacity: .55; cursor: progress; }
+
+    .io-name-field input {
+      padding: 8px; font: 12px var(--mono); letter-spacing: .08em; color: var(--accent-2);
+      background: rgba(6,11,18,.7); border: 1px solid var(--line); border-radius: 2px; outline: none;
+    }
+    .io-name-field input:focus { border-color: var(--line-2); }
+    .io-checks { display: flex; flex-direction: column; gap: 6px; }
+    .io-check {
+      display: flex; align-items: center; gap: 8px; cursor: pointer;
+      font: 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text);
+    }
+    .io-check input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+    .io-section-label {
+      font: 600 9.5px var(--mono); letter-spacing: .16em; text-transform: uppercase;
+      color: var(--dim); margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line);
+    }
+    .io-dropzone {
+      display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 22px 14px;
+      border: 1px dashed var(--line); border-radius: 2px; background: rgba(6,11,18,.45);
+      cursor: pointer; text-align: center; transition: border-color .14s ease, background .14s ease;
+    }
+    .io-dropzone b { font: 600 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--accent-2); }
+    .io-dropzone span { font: 10px var(--mono); color: var(--dim); }
+    .io-dropzone.drag, .io-dropzone.loaded { border-color: var(--accent); background: rgba(124,178,221,.1); }
+    .io-file-name {
+      font: 600 11px var(--mono); letter-spacing: .08em; color: var(--accent-2);
+    }
+    .io-file-meta { font: 10px var(--mono); color: var(--dim); margin-bottom: 4px; }
     .connect-primary {
       color: var(--accent-2) !important; background: var(--accent-soft) !important;
       border-color: var(--accent) !important;
@@ -573,6 +601,8 @@
     <span>SRVC <b id="topbar-peers">1 ONLINE</b></span>
     <span>SYS TIME <b data-clock>--:--:--</b></span>
     <span id="topbar-conn" class="conn-status offline"><span class="dot">●</span> <span id="topbar-conn-text">LOCAL</span></span>
+    <button id="import-btn" class="topbar-btn" type="button">Import</button>
+    <button id="export-btn" class="topbar-btn" type="button">Export</button>
     <button id="connect-btn" class="topbar-btn" type="button">Connect</button>
   </div>
 
@@ -642,6 +672,10 @@
       const enter = document.getElementById('boot-enter');
       const dismiss = () => {
         if (enter.disabled) return;
+        const op = document.getElementById('boot-operator');
+        if (op && !op.value.trim()) {
+          op.value = `avatar-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
+        }
         boot.classList.add('hide');
         setTimeout(() => boot.remove(), 800);
       };
@@ -674,6 +708,8 @@
     import { AvatarEditor } from './avatarEditor.js';
     import { SkyEditor } from './skyEditor.js';
     import { MultiplayerManager } from './multiplayer.js';
+    import { WorldIO } from './worldIO.js';
+    import { resolveAgentName } from './agentName.js';
 
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
@@ -813,9 +849,25 @@
       },
     });
     const bootOperator = document.getElementById('boot-operator');
-    multiplayer.setLocalName(bootOperator?.value?.trim() || 'Player');
-    bootOperator?.addEventListener('input', () => multiplayer.setLocalName(bootOperator.value));
+    const agentName = resolveAgentName(bootOperator?.value);
+    player.agentName = agentName;
+    if (bootOperator && !bootOperator.value.trim()) bootOperator.value = agentName;
+    multiplayer.setLocalName(agentName);
+    bootOperator?.addEventListener('input', () => {
+      const trimmed = bootOperator.value.trim();
+      if (!trimmed) return;
+      player.agentName = trimmed;
+      multiplayer.setLocalName(trimmed);
+    });
     document.getElementById('connect-btn')?.addEventListener('click', () => multiplayer.toggle());
+
+    const worldIO = new WorldIO({
+      terrain, player, avatar, avatarEditor, skyEditor, blocks, renderer,
+      multiplayer, scene, modelsUrl: AVATAR_MODELS,
+      getAgentName: () => player.agentName,
+    });
+    document.getElementById('export-btn')?.addEventListener('click', () => worldIO.open('export'));
+    document.getElementById('import-btn')?.addEventListener('click', () => worldIO.open('import'));
 
     // ---- alt-click camera focus -------------------------------------------
     // Alt + left-click sets the orbit pivot to the clicked world point (terrain
@@ -833,8 +885,20 @@
         const hit = ray.intersectObjects([terrain.terrainMesh, avatar.group, ...blocks.meshes()], true)[0];
         if (hit) player.setFocusPoint(hit.point);
       });
-      addEventListener('keydown', (e) => { if (e.key === 'Escape') player.clearFocus(); });
     }
+
+    // Escape closes chrome dialogs first, then recenters the camera.
+    addEventListener('keydown', (e) => {
+      if (e.code !== 'Escape') return;
+      if (multiplayer.isOpen() || worldIO.isOpen()) {
+        if (multiplayer.isOpen()) multiplayer.close();
+        if (worldIO.isOpen()) worldIO.close();
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      player.clearFocus();
+    }, true);
 
     // ---- loop -------------------------------------------------------------
     addEventListener('resize', () => {
@@ -851,6 +915,7 @@
       player.update(dt);                 // movement, grounding, chase camera
       multiplayer.update(dt);            // broadcast local pose to peers
       multiplayer.tickRemotes(dt);       // interpolate remote avatars
+      worldIO.tickAgents(dt);            // imported agent avatars
       sky.position.copy(camera.position); // keep the skydome centered on the camera
       renderer.render(scene, camera);
     });

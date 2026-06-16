@@ -112,6 +112,34 @@ export class BlockSummoner {
     block.mesh.userData.block = null;
   }
 
+  // Serialize every block's world transform + color for world import/export.
+  exportState() {
+    return this.blocks.map((block) => {
+      const m = block.mesh;
+      m.updateWorldMatrix(true, false);
+      m.matrixWorld.decompose(_wp, _wq, _ws);
+      return {
+        x: _wp.x, y: _wp.y, z: _wp.z,
+        qx: _wq.x, qy: _wq.y, qz: _wq.z, qw: _wq.w,
+        sx: _ws.x, sy: _ws.y, sz: _ws.z,
+        color: m.material.color.getHex(),
+      };
+    });
+  }
+
+  // Spawn blocks from exported state (appends to the current set).
+  importState(items) {
+    if (!Array.isArray(items)) return;
+    for (const item of items) {
+      const block = this.create(item.x ?? 0, item.y ?? 0, item.z ?? 0);
+      block.mesh.quaternion.set(item.qx ?? 0, item.qy ?? 0, item.qz ?? 0, item.qw ?? 1);
+      block.mesh.scale.set(item.sx ?? 1, item.sy ?? 1, item.sz ?? 1);
+      if (item.color != null) block.mesh.material.color.setHex(item.color);
+      block.mesh.updateMatrixWorld(true);
+      this.syncPhysics(block);
+    }
+  }
+
   clear() {
     while (this.blocks.length) this.remove(this.blocks[this.blocks.length - 1]);
   }

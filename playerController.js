@@ -61,6 +61,7 @@ export class PlayerController {
     this.controls = controls;
 
     this.scale = avatar.group.scale.x || 1;
+    this.agentName = null;
     this.active = false;
     this.flying = false;
     this.yaw = avatar.group.rotation.y;
