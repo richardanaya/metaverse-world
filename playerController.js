@@ -102,6 +102,7 @@ export class PlayerController {
     this.keys = new Set();
     this.input = { forward: false, back: false, left: false, right: false, up: false, down: false, run: false };
     this.inputEnabled = true; // gated off while the world editor owns the keyboard (block edit mode)
+    this.posing = false;      // true while editing the avatar: T-pose, no locomotion
 
     this._clips = null;
     this._stateKey = null;
@@ -231,6 +232,54 @@ export class PlayerController {
     if (!on) this.keys.clear();
   }
 
+  // ---- avatar edit "pose" mode ----------------------------------------
+  // While editing the avatar: drop all locomotion to a still T-pose (rest pose)
+  // and frame the camera on the front of the figure. The camera can still be
+  // orbited and alt-click focus still works; only the avatar is frozen.
+  enterPose() {
+    if (this.posing) return;
+    this.posing = true;
+    this.keys.clear();
+    this.avatar.stop();              // tear down clips -> rest (T) pose
+    this.avatar.setBlinking(false);  // fully static
+    this._faceCamera();
+  }
+
+  exitPose() {
+    if (!this.posing) return;
+    this.posing = false;
+    this.avatar.setBlinking(true);
+    this._stateKey = null;           // let update() re-establish the prior idle (stand/hover)
+    // Resume the chase from wherever the camera ended up (no lurch).
+    const g = this.avatar.group, s = this.scale;
+    this._prevTarget.set(g.position.x, g.position.y + 1.5 * s, g.position.z);
+  }
+
+  // Place the camera in FRONT of the avatar, looking back at its face.
+  _faceCamera() {
+    this.focusPoint = null; this._hasSavedCam = false;
+    const g = this.avatar.group, s = this.scale;
+    const target = this._target.set(g.position.x, g.position.y + 1.5 * s, g.position.z);
+    const facing = this._facing.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    this.camera.position.copy(target).addScaledVector(facing, 4.0 * s); // in front
+    this.camera.position.y += 0.2 * s;
+    this.controls.target.copy(target);
+    this._prevTarget.copy(target);
+    this.controls.update();
+  }
+
+  // Per-frame work while posing: avatar is frozen, but keep the camera live
+  // (right-stick orbit, R3 recenter, alt-click focus) so you can inspect it.
+  _updatePosing(dt) {
+    const gp = this._readGamepad();
+    if (gp.orbitX || gp.orbitY) {
+      this._orbitCamera(gp.orbitX, gp.orbitY, dt);
+      this._camManualUntil = performance.now() / 1000 + CAM_MANUAL_COOLDOWN;
+    }
+    if (gp.recenter) this._recenterCamera();
+    this._placeCamera(false, dt);
+  }
+
   // Poll the first connected gamepad (Web Gamepad API, standard mapping) and
   // translate it into the same intents the keyboard produces. LEFT stick drives
   // the avatar (X = turn, Y = forward/back analog); RIGHT stick orbits the
@@ -318,7 +367,7 @@ export class PlayerController {
   }
 
   _key(e, down) {
-    if (!this.active || !this.inputEnabled || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+    if (!this.active || !this.inputEnabled || this.posing || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
     const c = e.code;
     if (down) {
       if (c === 'KeyF' || c === 'Home') { e.preventDefault(); this.flying = !this.flying; this._vy = 0; if (this.flying) this.crouching = false; return; }
@@ -446,6 +495,7 @@ export class PlayerController {
   update(dt) {
     if (!this.active) return;
     dt = Math.min(dt, MAX_DT);
+    if (this.posing) { this._updatePosing(dt); return; } // avatar frozen for editing
     const S = this.scale;
 
     // ---- kill plane: fell off the terrain into the void -> respawn at center ----

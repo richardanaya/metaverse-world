@@ -722,7 +722,7 @@
     const terrainEditor = new TerrainEditor({ renderer, camera, controls, terrain, player });
 
     // Avatar customization (shape sliders + textures/materials, two tabs).
-    const avatarEditor = new AvatarEditor({ avatar });
+    const avatarEditor = new AvatarEditor({ avatar, player });
 
     // Sky tweaking (sun direction + atmospheric scattering). Moves `sun` so the
     // light follows the sky's sun.
@@ -770,6 +770,7 @@
       renderer.render(scene, camera);
     });
 
+    window.__dbg = { player, avatar, avatarEditor, camera, controls }; // TEMP debug handle
     // Everything is up — let the boot screen enable its ENTER button.
     window.__bootReady?.();
   </script>

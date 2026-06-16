@@ -41,8 +41,9 @@ function previewDataUrl(image, size = 64) {
 }
 
 export class AvatarEditor {
-  constructor({ avatar }) {
+  constructor({ avatar, player }) {
     this.avatar = avatar;
+    this.player = player;
     this.active = false;
     this.sliderState = {};   // id -> t (-1.5..1.5)
     this._inputs = new Map(); // id -> range input (for preset / reset sync)
@@ -57,8 +58,8 @@ export class AvatarEditor {
     this._build();
   }
 
-  open() { this.active = true; this.panel.style.display = 'flex'; }
-  close() { this.active = false; this.panel.style.display = 'none'; }
+  open() { this.active = true; this.panel.style.display = 'flex'; this.player?.enterPose(); }
+  close() { this.active = false; this.panel.style.display = 'none'; this.player?.exitPose(); }
 
   _pickFile(onFile) {
     this._file.value = '';
