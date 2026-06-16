@@ -225,7 +225,7 @@
     }
 
     /* ---- shared panel chrome ---- */
-    .ctx-menu, .edit-pane, .terrain-panel, .avatar-panel, .sky-panel {
+    .ctx-menu, .edit-pane, .terrain-panel, .avatar-panel, .sky-panel, .connect-panel {
       background:
         linear-gradient(155deg, rgba(13,21,32,.93), rgba(6,10,16,.95)) padding-box;
       border: 1px solid var(--line);
@@ -238,25 +238,25 @@
       font-family: var(--sans);
     }
     /* corner brackets (top-left + bottom-right) */
-    .edit-pane::before, .terrain-panel::before, .avatar-panel::before, .sky-panel::before,
-    .edit-pane::after,  .terrain-panel::after,  .avatar-panel::after,  .sky-panel::after {
+    .edit-pane::before, .terrain-panel::before, .avatar-panel::before, .sky-panel::before, .connect-panel::before,
+    .edit-pane::after,  .terrain-panel::after,  .avatar-panel::after,  .sky-panel::after,  .connect-panel::after {
       content:""; position:absolute; width:13px; height:13px; pointer-events:none; opacity:.85;
     }
-    .edit-pane::before, .terrain-panel::before, .avatar-panel::before, .sky-panel::before {
+    .edit-pane::before, .terrain-panel::before, .avatar-panel::before, .sky-panel::before, .connect-panel::before {
       left:-1px; top:-1px; border-left:1px solid var(--accent); border-top:1px solid var(--accent);
     }
-    .edit-pane::after, .terrain-panel::after, .avatar-panel::after, .sky-panel::after {
+    .edit-pane::after, .terrain-panel::after, .avatar-panel::after, .sky-panel::after, .connect-panel::after {
       right:-1px; bottom:-1px; border-right:1px solid var(--accent); border-bottom:1px solid var(--accent);
     }
 
     /* ---- titles + section tags ---- */
-    .edit-pane-title, .terrain-panel-title, .avatar-panel-title, .sky-panel-title {
+    .edit-pane-title, .terrain-panel-title, .avatar-panel-title, .sky-panel-title, .connect-panel-title {
       font: 600 11px/1.2 var(--mono); text-transform: uppercase; letter-spacing: .2em;
       color: var(--accent); padding: 1px 0 9px; margin-bottom: 1px;
       border-bottom: 1px solid var(--line);
     }
     .edit-pane-title::before, .terrain-panel-title::before,
-    .avatar-panel-title::before, .sky-panel-title::before {
+    .avatar-panel-title::before, .sky-panel-title::before, .connect-panel-title::before {
       content: "▍ /"; color: var(--accent-2); letter-spacing: 0; margin-right: 1px;
     }
     .terrain-section, .avatar-section, .sky-section {
@@ -268,7 +268,7 @@
     }
 
     /* ---- generic buttons across panels ---- */
-    .edit-pane button, .terrain-panel button, .avatar-panel button, .sky-panel button,
+    .edit-pane button, .terrain-panel button, .avatar-panel button, .sky-panel button, .connect-panel button,
     .ctx-menu button {
       font: 600 11px var(--sans); letter-spacing: .07em; text-transform: uppercase;
       color: var(--text); background: rgba(18,28,40,.55);
@@ -276,21 +276,21 @@
       transition: color .14s ease, border-color .14s ease, background .14s ease, box-shadow .14s ease;
     }
     .edit-pane button:hover, .terrain-panel button:hover, .avatar-panel button:hover,
-    .sky-panel button:hover, .ctx-menu button:hover {
+    .sky-panel button:hover, .connect-panel button:hover, .ctx-menu button:hover {
       color: var(--bright); border-color: var(--line-2);
       background: rgba(30,48,68,.7); box-shadow: 0 0 0 1px rgba(124,178,221,.08);
     }
     /* active / primary states get the accent glow */
-    .edit-pane button.active, .terrain-panel .seg button.active, .avatar-tabs button.active {
+    .edit-pane button.active, .terrain-panel .seg button.active, .connect-modes button.active, .avatar-tabs button.active {
       color: var(--accent-2); border-color: var(--accent); background: var(--accent-soft);
       box-shadow: 0 0 14px rgba(124,178,221,.22), inset 0 0 14px rgba(124,178,221,.07);
     }
-    .terrain-done, .avatar-done, .sky-done {
+    .terrain-done, .avatar-done, .sky-done, .connect-done {
       text-transform: uppercase; letter-spacing: .12em; font-weight: 600;
       color: var(--accent-2); background: var(--accent-soft); border: 1px solid var(--accent);
       border-radius: 2px; box-shadow: 0 0 14px rgba(124,178,221,.18), inset 0 0 14px rgba(124,178,221,.06);
     }
-    .terrain-done:hover, .avatar-done:hover, .sky-done:hover {
+    .terrain-done:hover, .avatar-done:hover, .sky-done:hover, .connect-done:hover {
       background: rgba(124,178,221,.22); color: #fff; box-shadow: 0 0 20px rgba(124,178,221,.32);
     }
     .edit-pane button.danger:hover, .ctx-menu button.danger:hover {
@@ -369,9 +369,9 @@
     .avatar-mat-head { font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text); }
 
     /* scrollbars inside panels */
-    .terrain-panel, .avatar-panel, .sky-panel { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
-    .terrain-panel::-webkit-scrollbar, .avatar-panel::-webkit-scrollbar, .sky-panel::-webkit-scrollbar { width: 6px; }
-    .terrain-panel::-webkit-scrollbar-thumb, .avatar-panel::-webkit-scrollbar-thumb, .sky-panel::-webkit-scrollbar-thumb {
+    .terrain-panel, .avatar-panel, .sky-panel, .connect-panel { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+    .terrain-panel::-webkit-scrollbar, .avatar-panel::-webkit-scrollbar, .sky-panel::-webkit-scrollbar, .connect-panel::-webkit-scrollbar { width: 6px; }
+    .terrain-panel::-webkit-scrollbar-thumb, .avatar-panel::-webkit-scrollbar-thumb, .sky-panel::-webkit-scrollbar-thumb, .connect-panel::-webkit-scrollbar-thumb {
       background: var(--line-2); border-radius: 0;
     }
 
@@ -390,6 +390,59 @@
     #topbar .sep { flex: 1; }
     #topbar b { color: var(--accent); font-weight: 600; }
     #topbar .dot { color: #6fd08a; }
+    #topbar .topbar-btn {
+      pointer-events: auto; cursor: pointer; padding: 3px 10px;
+      font: 600 10px var(--mono); letter-spacing: .14em; text-transform: uppercase;
+      color: var(--accent-2); background: var(--accent-soft); border: 1px solid var(--accent);
+      border-radius: 2px; transition: background .14s ease, color .14s ease, box-shadow .14s ease;
+    }
+    #topbar .topbar-btn:hover {
+      color: #fff; background: rgba(124,178,221,.26);
+      box-shadow: 0 0 14px rgba(124,178,221,.28);
+    }
+    #topbar .conn-status.connected .dot { color: #6fd08a; }
+    #topbar .conn-status.connecting .dot { color: #d4a85f; }
+    #topbar .conn-status.guest .dot { color: #6fd08a; }
+    #topbar .conn-status.host .dot { color: #6fd08a; }
+    #topbar .conn-status.offline .dot { color: #6a7a88; }
+
+    .connect-panel {
+      position: fixed; z-index: 25; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; gap: 8px; padding: 14px; width: min(420px, 92vw);
+      max-height: 86vh; overflow-y: auto;
+    }
+    .connect-pane { display: flex; flex-direction: column; gap: 8px; }
+    .connect-modes { display: flex; gap: 4px; }
+    .connect-modes button { flex: 1; padding: 7px 0; }
+    .connect-field {
+      display: flex; flex-direction: column; gap: 4px;
+      font: 10px var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--dim);
+    }
+    .connect-field textarea {
+      resize: vertical; min-height: 72px; padding: 8px;
+      font: 10px/1.4 var(--mono); color: var(--accent-2);
+      background: rgba(6,11,18,.7); border: 1px solid var(--line); border-radius: 2px;
+      outline: none;
+    }
+    .connect-field textarea:focus { border-color: var(--line-2); }
+    .connect-field textarea.connect-ready {
+      border-color: var(--accent);
+      box-shadow: 0 0 12px rgba(124,178,221,.25);
+    }
+    .connect-panel button:disabled { opacity: .55; cursor: progress; }
+    .connect-primary {
+      color: var(--accent-2) !important; background: var(--accent-soft) !important;
+      border-color: var(--accent) !important;
+    }
+    .connect-hint {
+      font: 10px/1.55 var(--mono); color: var(--dim); letter-spacing: .03em;
+    }
+    .connect-hint b { color: var(--accent); font-weight: 600; }
+    .connect-status, .connect-peers {
+      font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
+      border-top: 1px solid var(--line); padding-top: 6px;
+    }
+    .connect-status b, .connect-peers b { color: var(--accent-2); }
 
     #hud {
       left: 50%; bottom: 14px; right: auto; transform: translateX(-50%);
@@ -517,9 +570,10 @@
     <span class="wm">METAVERSE</span>
     <span>VER 0.1.0</span>
     <span class="sep"></span>
-    <span>SRVC <b>1 ONLINE</b></span>
+    <span>SRVC <b id="topbar-peers">1 ONLINE</b></span>
     <span>SYS TIME <b data-clock>--:--:--</b></span>
-    <span><span class="dot">●</span> CONNECTION STATE NOMINAL</span>
+    <span id="topbar-conn" class="conn-status offline"><span class="dot">●</span> <span id="topbar-conn-text">LOCAL</span></span>
+    <button id="connect-btn" class="topbar-btn" type="button">Connect</button>
   </div>
 
   <div id="hud">
@@ -619,6 +673,7 @@
     import { TerrainEditor } from './terrainEditor.js';
     import { AvatarEditor } from './avatarEditor.js';
     import { SkyEditor } from './skyEditor.js';
+    import { MultiplayerManager } from './multiplayer.js';
 
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
@@ -734,6 +789,34 @@
       terrainEditor, avatarEditor, skyEditor,
     });
 
+    // WebRTC multiplayer — copy-paste connection strings, Google STUN.
+    const topbarConn = document.getElementById('topbar-conn');
+    const topbarConnText = document.getElementById('topbar-conn-text');
+    const topbarPeers = document.getElementById('topbar-peers');
+    const multiplayer = new MultiplayerManager({
+      scene, player, modelsUrl: AVATAR_MODELS,
+      onStatus: (mode, count) => {
+        topbarConn.className = `conn-status ${mode}`;
+        if (mode === 'offline') {
+          topbarConnText.textContent = 'LOCAL';
+          topbarPeers.textContent = '1 ONLINE';
+        } else if (mode === 'connecting') {
+          topbarConnText.textContent = 'AWAITING HOST';
+          topbarPeers.textContent = 'LINKING';
+        } else if (mode === 'host') {
+          topbarConnText.textContent = `HOST · ${count} PEER${count === 1 ? '' : 'S'}`;
+          topbarPeers.textContent = `${count + 1} ONLINE`;
+        } else {
+          topbarConnText.textContent = `LINKED · ${count} PEER${count === 1 ? '' : 'S'}`;
+          topbarPeers.textContent = `${count + 1} ONLINE`;
+        }
+      },
+    });
+    const bootOperator = document.getElementById('boot-operator');
+    multiplayer.setLocalName(bootOperator?.value?.trim() || 'Player');
+    bootOperator?.addEventListener('input', () => multiplayer.setLocalName(bootOperator.value));
+    document.getElementById('connect-btn')?.addEventListener('click', () => multiplayer.toggle());
+
     // ---- alt-click camera focus -------------------------------------------
     // Alt + left-click sets the orbit pivot to the clicked world point (terrain
     // or a block) and suspends the avatar-chase so you can orbit around it.
@@ -766,6 +849,8 @@
       terrain.update(clock.elapsedTime); // animate the water
       avatar.update(dt);                 // pose, physics, blink, look-at
       player.update(dt);                 // movement, grounding, chase camera
+      multiplayer.update(dt);            // broadcast local pose to peers
+      multiplayer.tickRemotes(dt);       // interpolate remote avatars
       sky.position.copy(camera.position); // keep the skydome centered on the camera
       renderer.render(scene, camera);
     });

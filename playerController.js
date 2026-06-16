@@ -599,6 +599,28 @@ export class PlayerController {
     this._reframe = false;
   }
 
+  // Snapshot for multiplayer sync (world-space feet position + facing + locomotion).
+  getNetworkState() {
+    const t = this.body.translation();
+    const moving = this.input.forward || this.input.back;
+    let speed = 1;
+    const key = this._locomotionKey();
+    if (key === 'walk' || key === 'run' || key === 'crouchWalk') {
+      speed = key === 'run' ? 1.0 : key === 'crouchWalk' ? 1.0 : 1.05;
+      if (this.input.back && !this.input.forward) speed = key === 'run' ? -1.2 : -1.0;
+    }
+    return {
+      x: t.x,
+      y: t.y - this.feetOffset,
+      z: t.z,
+      yaw: this.yaw,
+      anim: key,
+      speed,
+      flying: this.flying,
+      crouching: this.crouching,
+    };
+  }
+
   // Teleport the capsule back to the center spawn (e.g. after falling off the edge).
   _respawn() {
     const spawn = this._spawnPoint();
