@@ -1,18 +1,23 @@
 // Fancy-style voxel clouds — procedural mask spawns world-aligned 3D puffs.
 // One texel → one soft rounded-cuboid puff; three stacked layers; wind scroll.
+// Optimized with circular LOD culling and softened with per-instance edge fades,
+// density-aware ragged silhouettes, and sun-driven silver lining.
 
 import * as THREE from 'three';
 
 const PUFF_VERT = /* glsl */`
   attribute float instanceSeed;
+  attribute float instanceFade;
 
   varying vec3 vLocalPos;
   varying vec3 vWorldPos;
   varying float vSeed;
+  varying float vFade;
 
   void main() {
     vLocalPos = position;
     vSeed = instanceSeed;
+    vFade = instanceFade;
 
     vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
@@ -29,10 +34,14 @@ const PUFF_FRAG = /* glsl */`
   uniform float uFogNear;
   uniform float uFogFar;
   uniform float uFogEnabled;
+  uniform vec3 uSunDirection;
+  uniform vec3 uSunColor;
+  uniform vec3 uShadowColor;
 
   varying vec3 vLocalPos;
   varying vec3 vWorldPos;
   varying float vSeed;
+  varying float vFade;
 
   float hash21(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -85,12 +94,22 @@ const PUFF_FRAG = /* glsl */`
     float edge = smoothstep(0.05, -0.14 - uSoftness * 0.1, sdRoundBox(p - bodyCenter, halfSize, cornerR));
     float heightNorm = clamp((p.y - baseY) / 0.82, 0.0, 1.0);
     float topFade = mix(1.0, 0.65 + wisp * 0.25, smoothstep(0.45, 0.98, heightNorm));
-    float bellyShadow = mix(0.82, 1.0, smoothstep(baseY, baseY + 0.22, p.y));
-    float alpha = shape * (0.55 + edge * 0.45) * (0.88 + wisp * 0.12) * topFade * bellyShadow * uOpacity;
+    float bellyShadow = mix(0.78, 1.0, smoothstep(baseY, baseY + 0.24, p.y));
+    float alpha = shape * (0.55 + edge * 0.45) * (0.88 + wisp * 0.12) * topFade * bellyShadow * uOpacity * vFade;
     if (alpha < 0.01) discard;
 
-    vec3 col = uColor * mix(0.86, 1.12, heightNorm) * (0.94 + wisp * 0.06);
-    col *= mix(vec3(0.94, 0.96, 1.04), vec3(1.0), heightNorm);
+    vec3 n = normalize(vec3(p.x * 0.58, p.y * 1.25 + 0.22, p.z * 0.58));
+    vec3 sunDir = normalize(uSunDirection);
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+    float sunFacing = clamp(dot(n, sunDir) * 0.5 + 0.5, 0.0, 1.0);
+    float sunLit = smoothstep(0.2, 0.95, sunFacing);
+    float rim = pow(max(dot(viewDir, sunDir), 0.0), 3.0) * smoothstep(0.15, 0.75, edge);
+    float selfShadow = mix(0.76, 1.0, heightNorm) * mix(0.9, 1.08, sunLit);
+
+    vec3 col = uColor * mix(0.82, 1.14, heightNorm) * (0.94 + wisp * 0.06);
+    col = mix(col * uShadowColor, col, selfShadow);
+    col += uSunColor * rim * (0.1 + 0.22 * heightNorm);
+    col *= mix(vec3(0.92, 0.95, 1.04), vec3(1.0), heightNorm);
     if (uFogEnabled > 0.5) {
       float fogDepth = length(vWorldPos - cameraPosition);
       float fogFactor = smoothstep(uFogNear, uFogFar, fogDepth);
@@ -113,6 +132,9 @@ function createPuffMaterial(color, opacity, roundness, softness) {
       uFogNear: { value: 300 },
       uFogFar: { value: 700 },
       uFogEnabled: { value: 1 },
+      uSunDirection: { value: new THREE.Vector3(0.45, 0.86, 0.24).normalize() },
+      uSunColor: { value: new THREE.Color(0xfff0d2) },
+      uShadowColor: { value: new THREE.Color(0xc9d6e8) },
     },
     vertexShader: PUFF_VERT,
     fragmentShader: PUFF_FRAG,
@@ -214,6 +236,29 @@ function createCloudMask({
   return data;
 }
 
+function createMaskDensity(mask) {
+  const out = new Uint8Array(MASK_SIZE * MASK_SIZE);
+  const weights = [
+    [0, 0, 3],
+    [1, 0, 2], [-1, 0, 2], [0, 1, 2], [0, -1, 2],
+    [1, 1, 1], [-1, 1, 1], [1, -1, 1], [-1, -1, 1],
+    [2, 0, 1], [-2, 0, 1], [0, 2, 1], [0, -2, 1],
+  ];
+  const maxWeight = 15;
+  for (let y = 0; y < MASK_SIZE; y++) {
+    for (let x = 0; x < MASK_SIZE; x++) {
+      let sum = 0;
+      for (const [ox, oy, w] of weights) {
+        const sx = floorMod(x + ox, MASK_SIZE);
+        const sy = floorMod(y + oy, MASK_SIZE);
+        if (mask[sy * MASK_SIZE + sx] >= 24) sum += w;
+      }
+      out[y * MASK_SIZE + x] = Math.round((sum / maxWeight) * 255);
+    }
+  }
+  return out;
+}
+
 function smoothstep(edge0, edge1, x) {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
@@ -235,6 +280,7 @@ export class CloudLayer {
       cloudColor: DEFAULTS.cloudColor.clone(),
     };
     this._mask = null;
+    this._maskDensity = null;
     this._scroll = new THREE.Vector2(0, 0);
     this._layers = [];
     this._piece = 12;
@@ -242,6 +288,11 @@ export class CloudLayer {
     this._maxInstances = (this._radius * 2 + 1) ** 2;
     this._lastCell = { x: NaN, z: NaN, sx: NaN, sz: NaN };
     this._dummy = new THREE.Object3D();
+    this._sunColor = new THREE.Color();
+    this._shadowColor = new THREE.Color();
+    this._sunWarmColor = new THREE.Color(0xffb36f);
+    this._shadowDayColor = new THREE.Color(0xd6e2f2);
+    this._autoTintColor = new THREE.Color();
     this._ready = false;
   }
 
@@ -263,6 +314,10 @@ export class CloudLayer {
         'instanceSeed',
         new THREE.InstancedBufferAttribute(new Float32Array(this._maxInstances), 1),
       );
+      geo.setAttribute(
+        'instanceFade',
+        new THREE.InstancedBufferAttribute(new Float32Array(this._maxInstances), 1),
+      );
 
       const mesh = new THREE.InstancedMesh(geo, mat, this._maxInstances);
       mesh.count = 0;
@@ -280,6 +335,7 @@ export class CloudLayer {
     this._ready = true;
     this._syncVisibility();
     this._syncFog();
+    this._syncSunLighting();
     this._updateGroupPositions(this.camera.position);
     this._rebuildAll(true);
     return this;
@@ -327,6 +383,7 @@ export class CloudLayer {
       noiseOctaves: p.noiseOctaves,
       noiseJitter: p.noiseJitter,
     });
+    this._maskDensity = createMaskDensity(this._mask);
   }
 
   _syncFog() {
@@ -340,6 +397,23 @@ export class CloudLayer {
         u.uFogNear.value = fog.near;
         u.uFogFar.value = fog.far;
       }
+    }
+  }
+
+  _syncSunLighting() {
+    if (!this.sky) return;
+    const sun = this.sky.material.uniforms.sunPosition.value;
+    const sunHeight = THREE.MathUtils.clamp(sun.y, -0.25, 1);
+    const day = smoothstep(-0.08, 0.22, sunHeight);
+    const warmth = 1 - smoothstep(0.12, 0.62, sunHeight);
+    this._sunColor.setHex(0xffffff).lerp(this._sunWarmColor, warmth * 0.55);
+    this._shadowColor.setHex(0x9fb7d5).lerp(this._shadowDayColor, day * 0.72);
+
+    for (const { material } of this._layers) {
+      const u = material.uniforms;
+      u.uSunDirection.value.copy(sun).normalize();
+      u.uSunColor.value.copy(this._sunColor).multiplyScalar(0.35 + day * 0.65);
+      u.uShadowColor.value.copy(this._shadowColor).multiplyScalar(0.75 + day * 0.25);
     }
   }
 
@@ -389,27 +463,45 @@ export class CloudLayer {
     const piece = this._piece;
     const R = this._radius;
     const mask = this._mask;
+    const density = this._maskDensity;
     const g = this._groupOrigin(cam);
     const seeds = mesh.geometry.getAttribute('instanceSeed');
+    const fades = mesh.geometry.getAttribute('instanceFade');
+    const fadeStart = Math.max(1, R - Math.max(6, Math.min(14, R * 0.16)));
     let count = 0;
 
     for (let dz = -R; dz <= R; dz++) {
       for (let dx = -R; dx <= R; dx++) {
+        const radial = Math.hypot(dx + 0.5, dz + 0.5);
+        if (radial > R + 0.35) continue;
+
         const tu = floorMod(g.cellX + dx + g.scrollGX + layer.phaseU, MASK_SIZE);
         const tv = floorMod(g.cellZ + dz + g.scrollGZ + layer.phaseV, MASK_SIZE);
-        if (mask[tv * MASK_SIZE + tu] < 24) continue;
+        const idx = tv * MASK_SIZE + tu;
+        if (mask[idx] < 24) continue;
+
+        const localDensity = density[idx] / 255;
+        // Cull some tiny detached wisps in sparse mask areas. The neighbor-density
+        // map keeps broad cloud islands intact while trimming noisy one-cell dots.
+        if (localDensity < 0.2 && cellHash(tu, tv, layer.phaseU + 11) > 0.35) continue;
 
         const h0 = cellHash(tu, tv, layer.phaseU);
         const h1 = cellHash(tu, tv, layer.phaseV + 3);
         const h2 = cellHash(tu, tv, layer.phaseU + layer.phaseV);
+        const h3 = cellHash(tu, tv, layer.phaseU + layer.phaseV + 19);
+        const edgeFade = smoothstep(R + 0.35, fadeStart, radial);
+        const densityFade = smoothstep(0.06, 0.72, localDensity);
+        const instanceFade = edgeFade * (0.46 + densityFade * 0.54);
+        if (instanceFade <= 0.015) continue;
 
         const wx = (g.cellX + dx) * piece + piece * (0.42 + h0 * 0.16);
         const wz = (g.cellZ + dz) * piece + piece * (0.42 + h1 * 0.16);
         const scale = this.params.puffScale;
         const layerLift = this.params.layerHeight;
-        const sx = piece * (3.9 + h0 * 1.05) * scale;
-        const sy = layer.thickness * layerLift * (1.85 + h2 * 0.92) * scale;
-        const sz = piece * (3.5 + h1 * 1.1) * scale;
+        const mass = 0.82 + densityFade * 0.24;
+        const sx = piece * (3.65 + h0 * 1.18 + h3 * 0.35) * scale * mass;
+        const sy = layer.thickness * layerLift * (1.68 + h2 * 0.95 + densityFade * 0.24) * scale;
+        const sz = piece * (3.3 + h1 * 1.18 + (1 - h3) * 0.28) * scale * mass;
 
         this._dummy.position.set(
           wx - g.x,
@@ -421,6 +513,7 @@ export class CloudLayer {
         this._dummy.updateMatrix();
         mesh.setMatrixAt(count, this._dummy.matrix);
         seeds.setX(count, h2);
+        fades.setX(count, instanceFade);
         count++;
         if (count >= this._maxInstances) break;
       }
@@ -430,6 +523,7 @@ export class CloudLayer {
     mesh.count = count;
     mesh.instanceMatrix.needsUpdate = true;
     seeds.needsUpdate = true;
+    fades.needsUpdate = true;
   }
 
   _rebuildAll(force = false) {
@@ -524,12 +618,18 @@ export class CloudLayer {
     this._updateGroupPositions(cam);
     this._rebuildAll(false);
     this._syncFog();
+    this._syncSunLighting();
 
     if (this.sky && p.autoTint) {
       const sunY = this.sky.material.uniforms.sunPosition.value.y;
-      const warm = smoothstep(0.0, 0.35, THREE.MathUtils.clamp(sunY, 0, 1));
-      const tint = new THREE.Color(0xf2f6fc);
-      tint.setRGB(0.88 + warm * 0.12, 0.9 + warm * 0.07, 0.97 + warm * 0.03);
+      const day = smoothstep(-0.06, 0.28, sunY);
+      const goldenHour = 1 - smoothstep(0.08, 0.62, Math.max(0, sunY));
+      const tint = this._autoTintColor;
+      tint.setRGB(
+        0.72 + day * 0.22 + goldenHour * 0.06,
+        0.78 + day * 0.17 + goldenHour * 0.02,
+        0.9 + day * 0.08 - goldenHour * 0.05,
+      );
       for (const { material } of this._layers) {
         material.uniforms.uColor.value.copy(tint);
       }
