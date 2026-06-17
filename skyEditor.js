@@ -15,8 +15,8 @@ export class SkyEditor {
     renderer,
     clouds = null,
     onSunChange = null,
-    envIntensityMin = 0.08,
-    envIntensityMax = 1.0,
+    envIntensityMin = 1.0,
+    envIntensityMax = 2.0,
   }) {
     this.sky = sky;
     this.u = sky.material.uniforms;

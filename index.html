@@ -773,6 +773,7 @@
     import { WorldIO } from './worldIO.js';
     import { resolveAgentName } from './agentName.js';
     import { CloudLayer } from './cloudLayer.js';
+    import { VegetationLayer } from './vegetation.js';
 
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
@@ -824,7 +825,7 @@
     scene.background = new THREE.Color(0x9fb7d5);
     scene.fog = new THREE.Fog(0x9fb7d5, 300, 700);
 
-    const HDRI_URL = 'https://threejs.org/examples/textures/equirectangular/venice_sunset_1k.hdr';
+    const HDRI_URL = 'https://threejs.org/examples/textures/equirectangular/monochrome_studio_02_1k.hdr';
     const ELEVATION_MIN = -20;
     const ELEVATION_MAX = 90;
 
@@ -915,6 +916,12 @@
     };
     bindPBREnvironment(terrain.group);
     bindPBREnvironment(avatar.group);
+
+    const vegetation = new VegetationLayer({
+      scene, terrain, seed: 42,
+      onMesh: (mesh) => bindPBREnvironment(mesh),
+    });
+    vegetation.init();
 
     // Minecraft-style scrolling cloud deck (horizontal plane + tiled texture).
     const clouds = new CloudLayer({ scene, camera, sky });
