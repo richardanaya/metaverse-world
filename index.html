@@ -672,10 +672,7 @@
       const enter = document.getElementById('boot-enter');
       const dismiss = () => {
         if (enter.disabled) return;
-        const op = document.getElementById('boot-operator');
-        if (op && !op.value.trim()) {
-          op.value = `avatar-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
-        }
+        window.__finalizeBootName?.();
         boot.classList.add('hide');
         setTimeout(() => boot.remove(), 800);
       };
@@ -849,10 +846,16 @@
       },
     });
     const bootOperator = document.getElementById('boot-operator');
-    const agentName = resolveAgentName(bootOperator?.value);
-    player.agentName = agentName;
-    if (bootOperator && !bootOperator.value.trim()) bootOperator.value = agentName;
-    multiplayer.setLocalName(agentName);
+    window.__finalizeBootName = () => {
+      const agentName = resolveAgentName(bootOperator?.value);
+      player.agentName = agentName;
+      multiplayer.setLocalName(agentName);
+    };
+    const typed = bootOperator?.value.trim();
+    if (typed) {
+      player.agentName = typed;
+      multiplayer.setLocalName(typed);
+    }
     bootOperator?.addEventListener('input', () => {
       const trimmed = bootOperator.value.trim();
       if (!trimmed) return;

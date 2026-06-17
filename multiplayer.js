@@ -84,7 +84,7 @@ export class MultiplayerManager {
     this.onStatus = onStatus ?? (() => {});
 
     this.localId = crypto.randomUUID();
-    this.localName = resolveAgentName();
+    this.localName = '';
     this.isHost = false;
     this.peers = new Map();         // peerId -> { pc, dc, name, playerId, isPending }
     this.remotes = new Map();       // playerId -> { avatar, clips, pos, yaw, anim, name }
