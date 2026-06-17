@@ -7,6 +7,7 @@
 // Minecraft-style cloud layer (opacity, altitude, wind).
 
 import * as THREE from 'three';
+import { showPanel, hidePanel } from './panelFade.js';
 
 export class SkyEditor {
   constructor({ sky, light, renderer, clouds = null }) {
@@ -26,8 +27,8 @@ export class SkyEditor {
     this._build();
   }
 
-  open() { this.active = true; this.panel.style.display = 'flex'; }
-  close() { this.active = false; this.panel.style.display = 'none'; }
+  open() { this.active = true; showPanel(this.panel); }
+  close() { this.active = false; hidePanel(this.panel); }
 
   _build() {
     this.panel = document.createElement('div');

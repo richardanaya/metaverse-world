@@ -14,6 +14,7 @@
 // collider so what you walk on matches what you see.
 
 import * as THREE from 'three';
+import { showPanel, hidePanel } from './panelFade.js';
 import { bindTerrainPainting, TERRAIN_TEXTURE_LAYERS, PBR_CHANNELS } from 'metaverse-terrain';
 
 const LAYER_LABELS = { sand: 'Sand', grass: 'Grass', rock: 'Rock', snow: 'Snow', water: 'Water' };
@@ -483,6 +484,7 @@ export class TerrainEditor {
     add('Walk speed', 0.5, 8, 0.1, () => p.walkSpeed, (v) => { p.walkSpeed = v; });
     add('Run speed', 1, 14, 0.1, () => p.runSpeed, (v) => { p.runSpeed = v; });
     add('Jump height', 0.2, 6, 0.1, () => p.jumpHeight, (v) => { p.jumpHeight = v; });
+    add('Run-jump boost', 0, 3, 0.1, () => p.runJumpBoost, (v) => { p.runJumpBoost = v; });
     add('Fly speed', 1, 16, 0.1, () => p.flySpeed, (v) => { p.flySpeed = v; });
     add('Max climb °', 10, 85, 1, () => p.maxClimbAngle, (v) => p.setMaxClimbAngle(v));
 
@@ -534,7 +536,7 @@ export class TerrainEditor {
   open() {
     if (this.active) return;
     this.active = true;
-    this.panel.style.display = 'flex';
+    showPanel(this.panel);
 
     this._prevMouseButtons = { ...this.orbit.mouseButtons };
     this.orbit.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
@@ -566,7 +568,7 @@ export class TerrainEditor {
   close() {
     if (!this.active) return;
     this.active = false;
-    this.panel.style.display = 'none';
+    hidePanel(this.panel);
     this._unbindPaint();
     this._mode = null;
     for (const b of Object.values(this._modeButtons)) b.classList.remove('active');

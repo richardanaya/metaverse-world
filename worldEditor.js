@@ -26,6 +26,7 @@
 
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { showPanel, hidePanel, isPanelOpen } from './panelFade.js';
 
 const CLICK_SLOP = 5; // px of pointer travel still counted as a click (not a drag)
 const HIGHLIGHT = 0x335577;
@@ -151,10 +152,10 @@ export class WorldEditor {
     }
     this.menu.style.left = `${x}px`;
     this.menu.style.top = `${y}px`;
-    this.menu.style.display = 'block';
+    showPanel(this.menu, { display: 'block' });
   }
 
-  _hideMenu() { this.menu.style.display = 'none'; }
+  _hideMenu() { hidePanel(this.menu); }
 
   _blockMenu(block, x, y) {
     this._showMenu(x, y, [
@@ -268,7 +269,7 @@ export class WorldEditor {
   }
 
   _onWindowPointerDown(e) {
-    if (this.menu.style.display !== 'none' && !this.menu.contains(e.target)) this._hideMenu();
+    if (isPanelOpen(this.menu) && !this.menu.contains(e.target)) this._hideMenu();
   }
 
   _openTerrainEditor() { this._deselect(); this._hideMenu(); this.avatarEditor?.close(); this.skyEditor?.close(); this.terrainEditor?.open(); }
@@ -341,7 +342,7 @@ export class WorldEditor {
       this._active = null;
       this._targets = [];
       this.gizmo.detach();
-      this.pane.style.display = 'none';
+      hidePanel(this.pane);
       this.orbit.enabled = true;
       this.blocks.player?.setInputEnabled(true);
       return;
@@ -361,7 +362,7 @@ export class WorldEditor {
     }
     this._computeTargets();
     this.gizmo.attach(this._pivot);
-    this.pane.style.display = 'flex';
+    showPanel(this.pane);
     this._title.textContent = blocks.length > 1 ? `Edit ${blocks.length} Blocks` : 'Edit Block';
     this._setMode(this._baseMode);
     this.blocks.player?.setInputEnabled(false); // free S / X / G / R for transforms
@@ -421,7 +422,7 @@ export class WorldEditor {
     if (!this.selection.length) return;
     this._releasePivot();
     this.gizmo.detach();
-    this.pane.style.display = 'none';
+    hidePanel(this.pane);
     this.orbit.enabled = true;
     this.blocks.player?.setInputEnabled(true);
   }

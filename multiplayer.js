@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { Avatar, initGltfAnim, getGltfClip } from 'metaverse-avatar';
 import { resolveAgentName } from './agentName.js';
+import { showPanel, hidePanel } from './panelFade.js';
 
 const CONNECTION_PREFIX = 'mv1:';
 const SYNC_INTERVAL = 1 / 20;
@@ -99,8 +100,8 @@ export class MultiplayerManager {
 
   setLocalName(name) { this.localName = resolveAgentName(name); }
 
-  open() { this._open = true; this.panel.style.display = 'flex'; }
-  close() { this._open = false; this.panel.style.display = 'none'; }
+  open() { this._open = true; showPanel(this.panel); }
+  close() { this._open = false; hidePanel(this.panel); }
   isOpen() { return this._open; }
   toggle() { this._open ? this.close() : this.open(); }
 

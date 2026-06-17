@@ -244,6 +244,16 @@
       color: var(--text);
       font-family: var(--sans);
     }
+    .ctx-menu, .edit-pane, .terrain-panel, .avatar-panel, .sky-panel, .connect-panel {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .28s ease;
+    }
+    .ctx-menu.is-visible, .edit-pane.is-visible, .terrain-panel.is-visible,
+    .avatar-panel.is-visible, .sky-panel.is-visible, .connect-panel.is-visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
     /* corner brackets (top-left + bottom-right) */
     .edit-pane::before, .terrain-panel::before, .avatar-panel::before, .sky-panel::before, .connect-panel::before,
     .edit-pane::after,  .terrain-panel::after,  .avatar-panel::after,  .sky-panel::after,  .connect-panel::after {

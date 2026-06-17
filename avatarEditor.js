@@ -13,6 +13,7 @@
 // example (SLIDERS / SEX_PRESETS / PBR_CHANNELS, applyShape, setSkinMap, …).
 
 import { SLIDERS, SEX_PRESETS, PBR_CHANNELS } from 'metaverse-avatar';
+import { showPanel, hidePanel } from './panelFade.js';
 
 const REGION_LABELS = { face: 'Face', upper: 'Upper body', lower: 'Lower body', eyes: 'Eyes' };
 
@@ -58,8 +59,8 @@ export class AvatarEditor {
     this._build();
   }
 
-  open() { this.active = true; this.panel.style.display = 'flex'; this.player?.enterPose(); }
-  close() { this.active = false; this.panel.style.display = 'none'; this.player?.exitPose(); }
+  open() { this.active = true; showPanel(this.panel); this.player?.enterPose(); }
+  close() { this.active = false; hidePanel(this.panel); this.player?.exitPose(); }
 
   _pickFile(onFile) {
     this._file.value = '';

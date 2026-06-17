@@ -7,6 +7,7 @@
 import { Avatar, initGltfAnim, getGltfClip, PBR_CHANNELS } from 'metaverse-avatar';
 import { TERRAIN_TEXTURE_LAYERS } from 'metaverse-terrain';
 import { avatarEntityKey, parseAvatarEntityKey } from './agentName.js';
+import { showPanel, hidePanel } from './panelFade.js';
 
 const FORMAT = 'metaverse-world';
 const VERSION = 1;
@@ -89,6 +90,7 @@ export class WorldIO {
     this.getAgentName = getAgentName ?? (() => player.agentName || 'avatar');
     this.clouds = clouds;
 
+    this._open = false;
     this._parsed = null;
     this._importedAgents = new Map(); // name -> { avatar }
     this._clipsReady = false;
@@ -97,12 +99,13 @@ export class WorldIO {
   }
 
   open(mode = 'import') {
-    this.panel.style.display = 'flex';
+    this._open = true;
+    showPanel(this.panel);
     this._setMode(mode);
     if (mode === 'export') this._refreshExportChecks();
   }
-  close() { this.panel.style.display = 'none'; }
-  isOpen() { return this.panel.style.display !== 'none'; }
+  close() { this._open = false; hidePanel(this.panel); }
+  isOpen() { return this._open; }
 
   // ---- export -----------------------------------------------------------
 

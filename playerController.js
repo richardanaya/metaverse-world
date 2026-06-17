@@ -35,7 +35,9 @@ const LOCO_ANIMS = {
 // Tunables are in avatar-local meters, multiplied by the avatar's world scale so
 // they stay meaningful however large the figure is rendered.
 const WALK_SPEED = 1.5, RUN_SPEED = 4.0, CROUCH_SPEED = 1.1, BACK_FACTOR = 0.6, TURN_RATE = 2.6;
-const FLY_SPEED = 4.0, JUMP_HEIGHT = 1.6;
+const FLY_SPEED = 4.0, JUMP_HEIGHT = 4.0;
+const RUN_JUMP_BOOST = 1.0;       // m/s extra forward at run-jump takeoff (avatar-local)
+const RUN_JUMP_BOOST_DECAY = 12;  // 1/s — fades the boost quickly so it's a punch, not a glide
 const E_HOLD = 0.26; // s — hold E longer than this (grounded) to take off into flight
 const GRAVITY = -28;        // world units / s² (tuned for the scaled-up world)
 const FADE_NORMAL = 0.25, FADE_SNAP = 0.15;
@@ -70,6 +72,7 @@ export class PlayerController {
     this.crouching = false;
     this._vy = 0;            // vertical velocity (world units/s)
     this._jumpQueued = false;
+    this._jumpForwardBoost = 0; // extra forward m/s along facing, decays in the air
     this._ePressedAt = null; // when E went down (grounded): tap = jump, hold = take off
     this._eConsumed = false; // true once a hold has triggered flight
     this._reframe = false;   // snap the chase camera next frame (after a respawn)
@@ -81,7 +84,8 @@ export class PlayerController {
     // maxClimbAngle is the Rapier character controller's slope limit.
     this._physicsDefaults = {
       gravity: GRAVITY, walkSpeed: WALK_SPEED, runSpeed: RUN_SPEED,
-      jumpHeight: JUMP_HEIGHT, flySpeed: FLY_SPEED, maxClimbAngle: 55,
+      jumpHeight: JUMP_HEIGHT, flySpeed: FLY_SPEED, runJumpBoost: RUN_JUMP_BOOST,
+      maxClimbAngle: 55,
     };
     Object.assign(this, this._physicsDefaults); // live, tunable copies
 
@@ -174,6 +178,20 @@ export class PlayerController {
 
     // Third-person chase camera: keep OrbitControls live but lock panning.
     this.controls.enablePan = false;
+    // OrbitControls maps Shift+left-drag to pan. Shift is also the run key, so with
+    // pan disabled that drag is swallowed entirely — orbit "breaks" while sprinting.
+    const STATE_ROTATE = 0;
+    const origMouseDown = this.controls._onMouseDown;
+    this.controls._onMouseDown = function (event) {
+      if (event.button === 0 && event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        if (!this.enableRotate) return;
+        this._handleMouseDownRotate(event);
+        this.state = STATE_ROTATE;
+        if (this.state !== -1) this.dispatchEvent({ type: 'start' });
+        return;
+      }
+      origMouseDown.call(this, event);
+    };
     this._placeCamera(true);
 
     window.addEventListener('keydown', this._onDown);
@@ -223,6 +241,7 @@ export class PlayerController {
     this.runSpeed = d.runSpeed;
     this.jumpHeight = d.jumpHeight;
     this.flySpeed = d.flySpeed;
+    this.runJumpBoost = d.runJumpBoost;
     this.setMaxClimbAngle(d.maxClimbAngle);
   }
 
@@ -371,7 +390,7 @@ export class PlayerController {
     if (!this.active || !this.inputEnabled || this.posing || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
     const c = e.code;
     if (down) {
-      if (c === 'KeyF' || c === 'Home') { e.preventDefault(); this.flying = !this.flying; this._vy = 0; if (this.flying) this.crouching = false; return; }
+      if (c === 'KeyF' || c === 'Home') { e.preventDefault(); this.flying = !this.flying; this._vy = 0; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } return; }
       if (c === 'KeyX') { e.preventDefault(); if (!this.flying && this.grounded) this.crouching = !this.crouching; return; }
       if (c === 'Space') { e.preventDefault(); if (!this.flying && !this.crouching && this.grounded) this._jumpQueued = true; return; }
       // E (grounded): tap = jump, hold = take off (update() promotes a sustained
@@ -525,7 +544,7 @@ export class PlayerController {
     const inp = this.input;
 
     // ---- gamepad: Y toggles flight, B (grounded) toggles crouch ----
-    if (gp.toggleFly) { this.flying = !this.flying; this._vy = 0; if (this.flying) this.crouching = false; }
+    if (gp.toggleFly) { this.flying = !this.flying; this._vy = 0; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } }
     if (gp.toggleCrouch && !this.flying && this.grounded) this.crouching = !this.crouching;
 
     // ---- gamepad A: tap = jump, hold = take off into flight (like keyboard E) ----
@@ -533,7 +552,7 @@ export class PlayerController {
       this._padAAt = now; this._padAConsumed = false;
     }
     if (this._padAAt != null && !this.flying && !this._padAConsumed && now - this._padAAt > E_HOLD) {
-      this.flying = true; this._vy = 0; this.crouching = false; this._padAConsumed = true;
+      this.flying = true; this._vy = 0; this.crouching = false; this._jumpForwardBoost = 0; this._padAConsumed = true;
     }
     if (!gp.aDown && this._padAAt != null) {
       if (!this.flying && !this._padAConsumed && !this.crouching && this.grounded) this._jumpQueued = true;
@@ -553,6 +572,7 @@ export class PlayerController {
       this.flying = true;
       this._vy = 0;
       this.crouching = false;
+      this._jumpForwardBoost = 0;
       this._eConsumed = true; // so the eventual key-up doesn't also jump
     }
 
@@ -571,6 +591,12 @@ export class PlayerController {
     if (inp.forward) { dx += facing.x * speed * dt * moveMag; dz += facing.z * speed * dt * moveMag; }
     if (inp.back) { dx -= facing.x * speed * BACK_FACTOR * dt * moveMag; dz -= facing.z * speed * BACK_FACTOR * dt * moveMag; }
 
+    // Modest forward punch when sprinting into a jump (decays over ~0.2 s in the air).
+    if (this._jumpForwardBoost > 0 && !this.flying) {
+      dx += facing.x * this._jumpForwardBoost * dt;
+      dz += facing.z * this._jumpForwardBoost * dt;
+    }
+
     // ---- vertical: flight, gravity, jump ----
     let dy;
     if (this.flying) {
@@ -579,6 +605,9 @@ export class PlayerController {
     } else {
       if (this._jumpQueued && this.grounded) {
         this._vy = Math.sqrt(2 * -this.gravity * this.jumpHeight * S); // v for a jumpHeight hop
+        if (inp.run && inp.forward && !this.crouching) {
+          this._jumpForwardBoost = this.runJumpBoost * S;
+        }
       }
       this._vy += this.gravity * dt;
       dy = this._vy * dt;
@@ -590,6 +619,12 @@ export class PlayerController {
     const mv = this.controller.computedMovement();
     this.grounded = this.controller.computedGrounded();
     if (this.grounded && this._vy < 0) this._vy = 0;
+
+    if (!this.flying && !this.grounded) {
+      this._jumpForwardBoost *= Math.exp(-RUN_JUMP_BOOST_DECAY * dt);
+    } else if (this.grounded) {
+      this._jumpForwardBoost = 0;
+    }
 
     const t = this.body.translation();
     this.body.setNextKinematicTranslation({ x: t.x + mv.x, y: t.y + mv.y, z: t.z + mv.z });
@@ -639,6 +674,7 @@ export class PlayerController {
     this._vy = 0;
     this.flying = false;
     this.crouching = false;
+    this._jumpForwardBoost = 0;
     this._reframe = true; // reframe the chase camera so it doesn't lurch across the map
   }
 }
