@@ -199,6 +199,12 @@
     .sky-row-head { display: flex; justify-content: space-between; color: #c9ced9; }
     .sky-row-head b { color: #fff; font-weight: 600; }
     .sky-row input[type=range] { width: 100%; accent-color: #6f9bd8; }
+    .sky-check {
+      display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 2px 0;
+      font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text);
+    }
+    .sky-check input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+    .sky-check.is-off { opacity: .55; }
     .sky-done {
       margin-top: 4px; cursor: pointer; padding: 8px 0; border: 1px solid #6f9bd8;
       border-radius: 8px; background: #3a5a8a; color: #fff; font: inherit; font-weight: 600;
@@ -741,7 +747,7 @@
     import { Avatar } from 'metaverse-avatar';
     import {
       TerrainRegion, loadPBRTextureSet,
-      DEFAULT_WATER_LEVEL, DEFAULT_TEXTURE_HEIGHTS, DEFAULT_TEXTURE_DENSITY,
+      DEFAULT_WATER_LEVEL, DEFAULT_TEXTURE_HEIGHTS,
       DEFAULT_HEX_TILE_RATE, DEFAULT_HEX_TILE_CONTRAST, DEFAULT_TEXTURE_BLEND_WIDTH,
     } from 'metaverse-terrain';
     import { PlayerController } from './playerController.js';
@@ -753,6 +759,7 @@
     import { MultiplayerManager } from './multiplayer.js';
     import { WorldIO } from './worldIO.js';
     import { resolveAgentName } from './agentName.js';
+    import { CloudLayer } from './cloudLayer.js';
 
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
@@ -797,6 +804,7 @@
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; // the Sky shader expects tone mapping
     renderer.toneMappingExposure = 0.6;
     document.body.appendChild(renderer.domElement);
@@ -834,12 +842,17 @@
     const sun = new THREE.DirectionalLight(0xfff2e0, 2.4);
     sun.position.set(120, 180, 80);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.near = 10;
-    sun.shadow.camera.far = 500;
-    sun.shadow.camera.left = sun.shadow.camera.bottom = -160;
-    sun.shadow.camera.right = sun.shadow.camera.top = 160;
+    sun.shadow.mapSize.set(4096, 4096);
+    sun.shadow.radius = 3;
+    sun.shadow.bias = -0.00015;
+    sun.shadow.normalBias = 0.03;
+    sun.shadow.camera.near = 5;
+    sun.shadow.camera.far = 450;
+    const shadowHalf = 110;
+    sun.shadow.camera.left = sun.shadow.camera.bottom = -shadowHalf;
+    sun.shadow.camera.right = sun.shadow.camera.top = shadowHalf;
     scene.add(sun);
+    scene.add(sun.target);
 
     // ---- sky (Preetham atmospheric scattering skydome) --------------------
     // Scaled to sit inside the camera's far plane and recentered on the camera
@@ -875,7 +888,7 @@
       seed: 42,
       waterLevel: DEFAULT_WATER_LEVEL,
       textureHeights: { ...DEFAULT_TEXTURE_HEIGHTS },
-      textureDensity: DEFAULT_TEXTURE_DENSITY,
+      textureDensity: 20,
       hexTileRate: DEFAULT_HEX_TILE_RATE,
       hexTileContrast: DEFAULT_HEX_TILE_CONTRAST,
       textureBlendWidth: DEFAULT_TEXTURE_BLEND_WIDTH,
@@ -884,6 +897,7 @@
       addBrushCursor: true, // brush ring preview while sculpting in the terrain editor
       // Layer bands match example/editor: water 21.5m, grass 22.5m, rock 30m, snow 36m.
     });
+    terrain.terrainMesh.castShadow = true;
     terrain.terrainMesh.receiveShadow = true;
     scene.add(terrain.group);
 
@@ -909,9 +923,13 @@
     // Avatar customization (shape sliders + textures/materials, two tabs).
     const avatarEditor = new AvatarEditor({ avatar, player });
 
+    // Minecraft-style scrolling cloud deck (horizontal plane + tiled texture).
+    const clouds = new CloudLayer({ scene, camera, sky });
+    clouds.init();
+
     // Sky tweaking (sun direction + atmospheric scattering). Moves `sun` so the
     // light follows the sky's sun.
-    const skyEditor = new SkyEditor({ sky, light: sun, renderer });
+    const skyEditor = new SkyEditor({ sky, light: sun, renderer, clouds });
 
     // Right-click world editing: blocks, terrain, avatar, or sky.
     const editor = new WorldEditor({
@@ -963,7 +981,7 @@
 
     const worldIO = new WorldIO({
       terrain, player, avatar, avatarEditor, skyEditor, blocks, renderer,
-      multiplayer, scene, modelsUrl: AVATAR_MODELS,
+      multiplayer, scene, modelsUrl: AVATAR_MODELS, clouds,
       getAgentName: () => player.agentName,
     });
     document.getElementById('export-btn')?.addEventListener('click', () => worldIO.open('export'));
@@ -1013,10 +1031,13 @@
       terrain.update(clock.elapsedTime); // animate the water
       avatar.update(dt);                 // pose, physics, blink, look-at
       player.update(dt);                 // movement, grounding, chase camera
+      sun.target.position.copy(player.avatar.group.position);
+      sun.target.position.y = 0;
       multiplayer.update(dt);            // broadcast local pose to peers
       multiplayer.tickRemotes(dt);       // interpolate remote avatars
       worldIO.tickAgents(dt);            // imported agent avatars
       sky.position.copy(camera.position); // keep the skydome centered on the camera
+      clouds.update(dt);
       renderer.render(scene, camera);
     });
 

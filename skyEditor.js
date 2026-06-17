@@ -3,16 +3,18 @@
 //
 // Controls the sun direction (elevation / azimuth — which also moves the scene's
 // directional light so lighting and sky stay in sync), the atmospheric scattering
-// uniforms (turbidity / rayleigh / mie / mie-G), and the renderer exposure.
+// uniforms (turbidity / rayleigh / mie / mie-G), renderer exposure, and the
+// Minecraft-style cloud layer (opacity, altitude, wind).
 
 import * as THREE from 'three';
 
 export class SkyEditor {
-  constructor({ sky, light, renderer }) {
+  constructor({ sky, light, renderer, clouds = null }) {
     this.sky = sky;
     this.u = sky.material.uniforms;
     this.light = light;
     this.renderer = renderer;
+    this.clouds = clouds;
     this.active = false;
 
     // Derive the starting sun elevation/azimuth from the sky's current sun dir.
@@ -48,6 +50,8 @@ export class SkyEditor {
     this._slider('Sun glow (Mie-G)', 0, 1, 0.01, this.u.mieDirectionalG.value, (v) => { this.u.mieDirectionalG.value = v; });
     this._slider('Exposure', 0, 1, 0.01, this.renderer.toneMappingExposure, (v) => { this.renderer.toneMappingExposure = v; });
 
+    if (this.clouds) this._buildCloudSection();
+
     const done = document.createElement('button');
     done.className = 'sky-done';
     done.textContent = 'Done';
@@ -55,6 +59,46 @@ export class SkyEditor {
     this.panel.appendChild(done);
 
     document.body.appendChild(this.panel);
+  }
+
+  _buildCloudSection() {
+    const p = this.clouds.params;
+    this._section('Clouds');
+    this._checkbox('Enabled', p.enabled, (on) => {
+      this.clouds.applyAtmosphereSettings({ cloudsEnabled: on });
+    });
+    this._slider('Opacity', 0, 1, 0.01, p.opacity, (v) => {
+      this.clouds.applyAtmosphereSettings({ cloudOpacity: v });
+    });
+    this._slider('Altitude (m)', 55, 140, 1, p.altitude, (v) => {
+      this.clouds.applyAtmosphereSettings({ cloudAltitude: v });
+    });
+    this._slider('Wind speed', 0, 0.04, 0.001, p.windSpeed, (v) => {
+      this.clouds.applyAtmosphereSettings({ cloudWindSpeed: v });
+    });
+    this._slider('Wind direction', 0, 360, 1, p.windDirection, (v) => {
+      this.clouds.applyAtmosphereSettings({ cloudWindDirection: v });
+    });
+    this._slider('Tiling', 3, 10, 0.5, p.tile, (v) => {
+      this.clouds.applyAtmosphereSettings({ cloudTile: v });
+    });
+  }
+
+  _checkbox(label, checked, onChange) {
+    const row = document.createElement('label');
+    row.className = 'sky-check';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = checked;
+    const span = document.createElement('span');
+    span.textContent = label;
+    input.addEventListener('change', () => {
+      row.classList.toggle('is-off', !input.checked);
+      onChange(input.checked);
+    });
+    row.classList.toggle('is-off', !checked);
+    row.append(input, span);
+    this.panel.appendChild(row);
   }
 
   _section(text) {

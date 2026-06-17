@@ -74,7 +74,7 @@ function isWorldFile(data) {
 export class WorldIO {
   constructor({
     terrain, player, avatar, avatarEditor, skyEditor, blocks, renderer,
-    multiplayer, scene, modelsUrl, getAgentName,
+    multiplayer, scene, modelsUrl, getAgentName, clouds = null,
   }) {
     this.terrain = terrain;
     this.player = player;
@@ -87,6 +87,7 @@ export class WorldIO {
     this.scene = scene;
     this.modelsUrl = modelsUrl;
     this.getAgentName = getAgentName ?? (() => player.agentName || 'avatar');
+    this.clouds = clouds;
 
     this._parsed = null;
     this._importedAgents = new Map(); // name -> { avatar }
@@ -211,7 +212,7 @@ export class WorldIO {
   _exportAtmosphere() {
     const s = this.skyEditor;
     const u = s.u;
-    return {
+    const out = {
       elevation: s.elevation,
       azimuth: s.azimuth,
       turbidity: u.turbidity.value,
@@ -220,6 +221,8 @@ export class WorldIO {
       mieDirectionalG: u.mieDirectionalG.value,
       exposure: this.renderer.toneMappingExposure,
     };
+    if (this.clouds) Object.assign(out, this.clouds.getAtmosphereSettings());
+    return out;
   }
 
   _exportObjects() {
@@ -407,6 +410,7 @@ export class WorldIO {
     if (data.mieDirectionalG != null) u.mieDirectionalG.value = data.mieDirectionalG;
     if (data.exposure != null) this.renderer.toneMappingExposure = data.exposure;
     s._updateSun();
+    this.clouds?.applyAtmosphereSettings(data);
   }
 
   _importObjects(data) {

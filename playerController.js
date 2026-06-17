@@ -47,6 +47,7 @@ const MAX_DT = 1 / 30;      // clamp so a stalled tab can't fling the capsule
 const CAM_FOLLOW_WALK = 1.8, CAM_FOLLOW_RUN = 3.4;
 const CAM_MANUAL_COOLDOWN = 0.5;   // s after manual camera input before auto-follow resumes
 const CAM_DEFAULT_PHI = 1.27;      // resting vertical angle used by recenter (R3)
+const CAM_FOCUS_RATE = 11;         // 1/s — alt-click orbit pivot ease-in
 
 const MOVE_KEYS = [
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
@@ -73,8 +74,7 @@ export class PlayerController {
     this._eConsumed = false; // true once a hold has triggered flight
     this._reframe = false;   // snap the chase camera next frame (after a respawn)
     this.focusPoint = null;  // when set, the camera orbits this fixed world point instead of chasing the avatar
-    this._savedCamPos = new THREE.Vector3(); // chase-camera position captured on entering focus, restored on exit
-    this._hasSavedCam = false;
+    this._unfocusing = false; // true while Escape eases the pivot back to the avatar
 
     // Live-tunable world/character physics (exposed in the terrain editor's
     // Physics section). Gravity feeds the kinematic capsule's manual integration;
@@ -258,7 +258,7 @@ export class PlayerController {
 
   // Place the camera in FRONT of the avatar, looking back at its face.
   _faceCamera() {
-    this.focusPoint = null; this._hasSavedCam = false;
+    this.focusPoint = null; this._unfocusing = false;
     const g = this.avatar.group, s = this.scale;
     const target = this._target.set(g.position.x, g.position.y + 1.5 * s, g.position.z);
     const facing = this._facing.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
@@ -343,7 +343,7 @@ export class PlayerController {
   // Instant snap behind (R3): align azimuth and reset to the resting pitch,
   // keeping the user's current zoom distance.
   _recenterCamera() {
-    if (this.focusPoint) return;
+    if (this.focusPoint || this._unfocusing) return;
     const offset = this._orbitOffset.copy(this.camera.position).sub(this.controls.target);
     const s = this._spherical.setFromVector3(offset);
     s.theta = this._behindTheta();
@@ -430,38 +430,45 @@ export class PlayerController {
   // Lock the orbit target onto a fixed world point (alt-click). The chase camera
   // suspends so the user can freely orbit around it; clearFocus() resumes chasing.
   setFocusPoint(point) {
-    // Entering focus from the chase camera: remember where the camera was so
-    // Escape can put it back. Re-focusing while already focused keeps the
-    // original chase position.
-    if (!this.focusPoint) {
-      this._savedCamPos.copy(this.camera.position);
-      this._hasSavedCam = true;
-    }
-    this.focusPoint = (this.focusPoint ?? new THREE.Vector3()).copy(point);
-    this.controls.target.copy(point);
-    this.controls.update();
+    this._unfocusing = false;
+    (this.focusPoint ??= new THREE.Vector3()).copy(point);
   }
 
-  // Return to the avatar-centered chase camera (Escape). Restore the camera to
-  // its pre-focus position and re-seed the tracking reference to the avatar's
-  // current head target so the resume doesn't lurch.
+  // Ease the orbit pivot back to the avatar (Escape), then resume chase camera.
   clearFocus() {
-    if (!this.focusPoint) return;
+    if (!this.focusPoint && !this._unfocusing) return;
     this.focusPoint = null;
-    if (this._hasSavedCam) {
-      this.camera.position.copy(this._savedCamPos);
-      this._hasSavedCam = false;
+    this._unfocusing = true;
+  }
+
+  _easeOrbitPivot(goal, dt) {
+    const prev = this._prevTarget.copy(this.controls.target);
+    const k = dt ? 1 - Math.exp(-CAM_FOCUS_RATE * dt) : 1;
+    this.controls.target.lerp(goal, k);
+    if (this.controls.target.distanceToSquared(goal) < 1e-4) {
+      this.controls.target.copy(goal);
     }
-    const g = this.avatar.group, s = this.scale;
-    this._prevTarget.set(g.position.x, g.position.y + 1.5 * s, g.position.z);
+    this.camera.position.add(this._camDelta.subVectors(this.controls.target, prev));
+    this.controls.update();
+    return this.controls.target.distanceToSquared(goal) < 1e-4;
   }
 
   _placeCamera(initial, dt = 0) {
     // Focus mode: hold the orbit target on the chosen point and let OrbitControls
     // drive the camera. Don't track the avatar.
     if (this.focusPoint) {
-      this.controls.target.copy(this.focusPoint);
-      this.controls.update();
+      this._easeOrbitPivot(this.focusPoint, dt);
+      return;
+    }
+
+    if (this._unfocusing) {
+      const g = this.avatar.group;
+      const s = this.scale;
+      const goal = this._target.set(g.position.x, g.position.y + 1.5 * s, g.position.z);
+      if (this._easeOrbitPivot(goal, dt)) {
+        this._unfocusing = false;
+        this._prevTarget.copy(goal);
+      }
       return;
     }
     const g = this.avatar.group;
