@@ -134,6 +134,8 @@ export class WorldIO {
       hexTileContrast: t.hexTileContrast,
       textureHeights: { ...t.textureHeights },
       textureBlendWidth: t.textureBlendWidth,
+      normalStrength: t.normalStrength,
+      terrainAOIntensity: t.terrainAOIntensity,
       heightMap: float32ToBase64(t.heightMap),
       textures,
     };
@@ -281,6 +283,12 @@ export class WorldIO {
     if (data.hexTileContrast != null) t.setHexTileContrast(data.hexTileContrast);
     if (data.textureHeights) t.setTextureHeights(data.textureHeights);
     if (data.waterEnabled != null) t.setWaterEnabled(data.waterEnabled);
+    if (data.normalStrength != null) t.setNormalStrength(data.normalStrength);
+    if (data.terrainAOIntensity != null) t.setTerrainAOIntensity(data.terrainAOIntensity);
+    if (data.textureBlendWidth != null) {
+      t.textureBlendWidth = data.textureBlendWidth;
+      t.syncTextureHeightUniforms();
+    }
 
     if (data.textures) {
       for (const layer of TERRAIN_TEXTURE_LAYERS) {

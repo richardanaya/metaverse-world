@@ -64,7 +64,7 @@
     /* Floating terrain editor sidebar */
     .terrain-panel {
       position: fixed; z-index: 20; right: 14px; top: 50%; transform: translateY(-50%);
-      display: flex; flex-direction: column; gap: 8px; padding: 14px; width: 210px;
+      display: flex; flex-direction: column; gap: 8px; padding: 14px; width: 244px;
       max-height: 86vh; overflow-y: auto;
       background: rgba(28, 31, 40, 0.94); border: 1px solid #3a3f4e;
       border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.45);
@@ -113,6 +113,7 @@
       background: rgba(20, 22, 29, 0.6);
     }
     .terrain-slot.filled .terrain-slot-tag { background: rgba(58, 90, 138, 0.8); }
+    .terrain-slot:disabled { cursor: default; opacity: 0.92; }
     /* Floating avatar editor sidebar (tabbed) */
     .avatar-panel {
       position: fixed; z-index: 20; right: 14px; top: 50%; transform: translateY(-50%);
@@ -298,6 +299,46 @@
     }
     .edit-pane button.done { background: rgba(14,22,32,.6); }
     .terrain-reset { width: 100%; margin-top: 6px; }
+    .terrain-check {
+      display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 2px 0;
+      font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text);
+    }
+    .terrain-check input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+    .terrain-check.is-off { opacity: .55; }
+    .terrain-layer-slider { margin: 6px 0 4px; padding: 4px 0 6px; touch-action: none; }
+    .terrain-layer-slider.water-off .layer-handle.water { opacity: .45; }
+    .terrain-layer-track {
+      position: relative; height: 10px; border-radius: 2px;
+      background: rgba(6,11,18,.7); box-shadow: inset 0 0 0 1px var(--line);
+    }
+    .terrain-layer-gradient {
+      position: absolute; inset: 0; border-radius: inherit; opacity: .92;
+    }
+    .terrain-layer-handle {
+      position: absolute; top: 50%; width: 11px; height: 11px; padding: 0; margin: 0;
+      border: 1px solid var(--accent-2); border-radius: 1px; transform: translate(-50%, -50%) rotate(45deg);
+      box-shadow: 0 0 8px rgba(124,178,221,.35); cursor: ew-resize; z-index: 2;
+    }
+    .terrain-layer-handle.water { background: #1f8aa5; }
+    .terrain-layer-handle.grass { background: #6d8b35; }
+    .terrain-layer-handle.rock { background: #8c928f; }
+    .terrain-layer-handle.snow { background: #e8edf0; }
+    .terrain-layer-readouts {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 3px 8px;
+      font: 9px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--dim);
+    }
+    .terrain-layer-readouts b { color: var(--accent-2); font-weight: 600; }
+    .terrain-heightmap {
+      display: grid; grid-template-columns: 1fr 64px; gap: 8px; align-items: center;
+      margin-top: 4px; padding: 8px; border: 1px solid var(--line); border-radius: 2px;
+      background: rgba(8,13,20,.45);
+    }
+    .terrain-heightmap-label { font: 9px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+    .terrain-heightmap-stats { font: 10px var(--mono); color: var(--text); margin-top: 3px; }
+    .terrain-heightmap canvas {
+      width: 64px; height: 64px; border: 1px solid var(--line); border-radius: 2px;
+      image-rendering: pixelated; background: rgba(6,11,18,.7);
+    }
 
     /* ---- row labels + numeric readouts ---- */
     .terrain-row-head, .avatar-row-head, .sky-row-head {
@@ -586,7 +627,7 @@
       "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
       "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar/index.js",
-      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.1.1/index.js",
+      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.2.0/index.js",
       "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
     }
   }
@@ -695,9 +736,14 @@
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
     import { Sky } from 'three/addons/objects/Sky.js';
     import { Avatar } from 'metaverse-avatar';
-    import { TerrainRegion } from 'metaverse-terrain';
+    import {
+      TerrainRegion, loadPBRTextureSet,
+      DEFAULT_WATER_LEVEL, DEFAULT_TEXTURE_HEIGHTS, DEFAULT_TEXTURE_DENSITY,
+      DEFAULT_HEX_TILE_RATE, DEFAULT_HEX_TILE_CONTRAST, DEFAULT_TEXTURE_BLEND_WIDTH,
+    } from 'metaverse-terrain';
     import { PlayerController } from './playerController.js';
     import { BlockSummoner } from './blocks.js';
     import { WorldEditor } from './worldEditor.js';
@@ -711,12 +757,45 @@
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
     const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar/models/';
-    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.1.1/texture';
+    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.2.0/texture';
+    const PBR_TEXTURE_URLS = {
+      sand: {
+        metal: `${TEXTURE_BASE}/terrain-sand_metal.png`,
+        roughness: `${TEXTURE_BASE}/terrain-sand_roughness.png`,
+        normal: `${TEXTURE_BASE}/terrain-sand_normal.png`,
+        ao: `${TEXTURE_BASE}/terrain-sand_ao.png`,
+      },
+      grass: {
+        metal: `${TEXTURE_BASE}/terrain-grass_metal.png`,
+        roughness: `${TEXTURE_BASE}/terrain-grass_roughness.png`,
+        normal: `${TEXTURE_BASE}/terrain-grass_normal.png`,
+        ao: `${TEXTURE_BASE}/terrain-grass_ao.png`,
+      },
+      rock: {
+        metal: `${TEXTURE_BASE}/terrain-rock_metal.png`,
+        roughness: `${TEXTURE_BASE}/terrain-rock_roughness.png`,
+        normal: `${TEXTURE_BASE}/terrain-rock_normal.png`,
+        ao: `${TEXTURE_BASE}/terrain-rock_ao.png`,
+      },
+      snow: {
+        metal: `${TEXTURE_BASE}/terrain-snow_metal.png`,
+        roughness: `${TEXTURE_BASE}/terrain-snow_roughness.png`,
+        normal: `${TEXTURE_BASE}/terrain-snow_normal.png`,
+        ao: `${TEXTURE_BASE}/terrain-snow_ao.png`,
+      },
+      water: {
+        metal: `${TEXTURE_BASE}/terrain-water_metal.png`,
+        roughness: `${TEXTURE_BASE}/terrain-water_roughness.png`,
+        normal: `${TEXTURE_BASE}/terrain-water_normal.png`,
+        ao: `${TEXTURE_BASE}/terrain-water_ao.png`,
+      },
+    };
 
     // ---- renderer / scene -------------------------------------------------
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(devicePixelRatio);
     renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; // the Sky shader expects tone mapping
     renderer.toneMappingExposure = 0.6;
@@ -726,10 +805,23 @@
     scene.background = new THREE.Color(0x9fb7d5);
     scene.fog = new THREE.Fog(0x9fb7d5, 300, 700);
 
-    // Neutral studio environment so the avatar's metallic/roughness materials
-    // have something to reflect (metals render near-black without one).
+    // HDRI environment for terrain PBR + avatar materials (falls back to RoomEnvironment).
     const pmrem = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.compileEquirectangularShader();
+    const environmentReady = (async () => {
+      try {
+        const hdr = await new RGBELoader().loadAsync(
+          'https://threejs.org/examples/textures/equirectangular/venice_sunset_1k.hdr',
+        );
+        scene.environment = pmrem.fromEquirectangular(hdr).texture;
+        hdr.dispose();
+      } catch (err) {
+        console.warn('HDRI environment unavailable; using RoomEnvironment.', err);
+        scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      } finally {
+        pmrem.dispose();
+      }
+    })();
 
     const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 900);
     camera.position.set(40, 40, 60);
@@ -772,22 +864,27 @@
       snow: `${TEXTURE_BASE}/terrain-snow.png`,
       water: `${TEXTURE_BASE}/terrain-water.png`,
     };
+    const [pbrTextures] = await Promise.all([
+      loadPBRTextureSet(PBR_TEXTURE_URLS),
+      environmentReady,
+    ]);
     const terrain = new TerrainRegion({
       textures,
+      pbrTextures,
       regionSize: 256,
       seed: 42,
-      textureDensity: 20, // default texture scale
+      waterLevel: DEFAULT_WATER_LEVEL,
+      textureHeights: { ...DEFAULT_TEXTURE_HEIGHTS },
+      textureDensity: DEFAULT_TEXTURE_DENSITY,
+      hexTileRate: DEFAULT_HEX_TILE_RATE,
+      hexTileContrast: DEFAULT_HEX_TILE_CONTRAST,
+      textureBlendWidth: DEFAULT_TEXTURE_BLEND_WIDTH,
+      normalStrength: 1.0,
+      terrainAOIntensity: 1.0,
       addBrushCursor: true, // brush ring preview while sculpting in the terrain editor
-      // Height range (-12..52) and water level (28) use the library defaults, so
-      // the lowlands flood and you get visible water around the hills.
+      // Layer bands match example/editor: water 21.5m, grass 22.5m, rock 30m, snow 36m.
     });
     terrain.terrainMesh.receiveShadow = true;
-    // Kill the terrain's specular sheen — make the surface fully matte.
-    for (const mat of [].concat(terrain.terrainMesh.material)) {
-      if ('roughness' in mat) mat.roughness = 1.0;
-      if ('metalness' in mat) mat.metalness = 0.0;
-      mat.needsUpdate = true;
-    }
     scene.add(terrain.group);
 
     // ---- avatar -----------------------------------------------------------

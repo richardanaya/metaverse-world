@@ -399,10 +399,14 @@ export class PlayerController {
 
   _locomotionKey() {
     const moving = this.input.forward || this.input.back;
+    const backOnly = this.input.back && !this.input.forward;
     if (this.flying) return 'hover';
     if (!this.grounded) return 'jump';
     if (this.crouching) return moving ? 'crouchWalk' : 'crouchIdle';
-    return moving ? (this.input.run ? 'run' : 'walk') : 'stand';
+    if (!moving) return 'stand';
+    // Backwards always plays the walk cycle (even while holding run).
+    if (backOnly) return 'walk';
+    return this.input.run ? 'run' : 'walk';
   }
 
   _setState(key) {
@@ -589,8 +593,7 @@ export class PlayerController {
     const key = this._locomotionKey();
     this._setState(key);
     if (key === 'walk' || key === 'run' || key === 'crouchWalk') {
-      let ts = key === 'run' ? 1.0 : key === 'crouchWalk' ? 1.0 : 1.05;
-      if (inp.back && !inp.forward) ts = key === 'run' ? -1.2 : -1.0;
+      const ts = key === 'run' ? 1.0 : key === 'crouchWalk' ? 1.0 : 1.05;
       this.avatar.setSpeed(ts);
     } else {
       this.avatar.setSpeed(1);
@@ -608,7 +611,6 @@ export class PlayerController {
     const key = this._locomotionKey();
     if (key === 'walk' || key === 'run' || key === 'crouchWalk') {
       speed = key === 'run' ? 1.0 : key === 'crouchWalk' ? 1.0 : 1.05;
-      if (this.input.back && !this.input.forward) speed = key === 'run' ? -1.2 : -1.0;
     }
     return {
       x: t.x,
