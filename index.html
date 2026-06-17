@@ -199,6 +199,10 @@
     .sky-row-head { display: flex; justify-content: space-between; color: #c9ced9; }
     .sky-row-head b { color: #fff; font-weight: 600; }
     .sky-row input[type=range] { width: 100%; accent-color: #6f9bd8; }
+    .sky-row input.sky-color {
+      width: 100%; height: 28px; padding: 2px; border: 1px solid #3a3f4e;
+      border-radius: 6px; background: #1c1f28; cursor: pointer;
+    }
     .sky-check {
       display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 2px 0;
       font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text);
@@ -643,7 +647,7 @@
       "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
       "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar/index.js",
-      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.2.0/index.js",
+      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.2.1/index.js",
       "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
     }
   }
@@ -751,7 +755,6 @@
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
     import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
     import { Sky } from 'three/addons/objects/Sky.js';
     import { Avatar } from 'metaverse-avatar';
@@ -774,7 +777,7 @@
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
     const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar/models/';
-    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.2.0/texture';
+    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.2.1/texture';
     const PBR_TEXTURE_URLS = {
       sand: {
         metal: `${TEXTURE_BASE}/terrain-sand_metal.png`,
@@ -813,8 +816,6 @@
     renderer.setPixelRatio(devicePixelRatio);
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; // the Sky shader expects tone mapping
     renderer.toneMappingExposure = 0.6;
     document.body.appendChild(renderer.domElement);
@@ -823,19 +824,20 @@
     scene.background = new THREE.Color(0x9fb7d5);
     scene.fog = new THREE.Fog(0x9fb7d5, 300, 700);
 
-    // HDRI environment for terrain PBR + avatar materials (falls back to RoomEnvironment).
+    const HDRI_URL = 'https://threejs.org/examples/textures/equirectangular/venice_sunset_1k.hdr';
+    const ELEVATION_MIN = -20;
+    const ELEVATION_MAX = 90;
+
     const pmrem = new THREE.PMREMGenerator(renderer);
     pmrem.compileEquirectangularShader();
     const environmentReady = (async () => {
       try {
-        const hdr = await new RGBELoader().loadAsync(
-          'https://threejs.org/examples/textures/equirectangular/venice_sunset_1k.hdr',
-        );
+        const hdr = await new RGBELoader().loadAsync(HDRI_URL);
         scene.environment = pmrem.fromEquirectangular(hdr).texture;
+        scene.environmentIntensity = 1.0;
         hdr.dispose();
       } catch (err) {
-        console.warn('HDRI environment unavailable; using RoomEnvironment.', err);
-        scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+        console.warn('HDRI environment unavailable.', err);
       } finally {
         pmrem.dispose();
       }
@@ -846,23 +848,6 @@
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-
-    // ---- lights -----------------------------------------------------------
-    scene.add(new THREE.HemisphereLight(0xc8d4ff, 0x4a4636, 1.1));
-    const sun = new THREE.DirectionalLight(0xfff2e0, 2.4);
-    sun.position.set(120, 180, 80);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(4096, 4096);
-    sun.shadow.radius = 3;
-    sun.shadow.bias = -0.00015;
-    sun.shadow.normalBias = 0.03;
-    sun.shadow.camera.near = 5;
-    sun.shadow.camera.far = 450;
-    const shadowHalf = 110;
-    sun.shadow.camera.left = sun.shadow.camera.bottom = -shadowHalf;
-    sun.shadow.camera.right = sun.shadow.camera.top = shadowHalf;
-    scene.add(sun);
-    scene.add(sun.target);
 
     // ---- sky (Preetham atmospheric scattering skydome) --------------------
     // Scaled to sit inside the camera's far plane and recentered on the camera
@@ -876,7 +861,7 @@
       u.rayleigh.value = 2.2;
       u.mieCoefficient.value = 0.005;
       u.mieDirectionalG.value = 0.8;
-      u.sunPosition.value.copy(sun.position).normalize(); // align sky sun with the light
+      u.sunPosition.value.set(0.45, 0.86, 0.24).normalize();
     }
 
     // ---- terrain ----------------------------------------------------------
@@ -907,16 +892,39 @@
       addBrushCursor: true, // brush ring preview while sculpting in the terrain editor
       // Layer bands match example/editor: water 21.5m, grass 22.5m, rock 30m, snow 36m.
     });
-    terrain.terrainMesh.castShadow = true;
-    terrain.terrainMesh.receiveShadow = true;
     scene.add(terrain.group);
 
     // ---- avatar -----------------------------------------------------------
     const avatar = await new Avatar().load(AVATAR_MODELS); // ~1.8 m, unscaled
     avatar.group.rotation.y = -Math.PI / 2; // face +Z, the controller's forward
-    avatar.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     scene.add(avatar.group);
     avatar.setBlinking(true);
+
+    const envMaterials = [];
+    const bindPBREnvironment = (root) => {
+      if (!scene.environment) return;
+      root.traverse((o) => {
+        if (!o.isMesh) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (!m?.isMeshStandardMaterial || envMaterials.includes(m)) continue;
+          m.envMap = scene.environment;
+          envMaterials.push(m);
+        }
+      });
+    };
+    bindPBREnvironment(terrain.group);
+    bindPBREnvironment(avatar.group);
+
+    // Minecraft-style scrolling cloud deck (horizontal plane + tiled texture).
+    const clouds = new CloudLayer({ scene, camera, sky });
+    clouds.init();
+
+    let syncEnvironmentLighting = () => {};
+    const skyEditor = new SkyEditor({
+      sky, renderer, clouds,
+      onSunChange: () => syncEnvironmentLighting(),
+    });
 
     // ---- player controller (walk/run/jump/fly + terrain grounding) --------
     const player = new PlayerController({ avatar, terrain, camera, controls });
@@ -924,7 +932,10 @@
 
     // Block placement shares the controller's physics world, so blocks are
     // instantly solid to the character capsule.
-    const blocks = new BlockSummoner({ scene, player });
+    const blocks = new BlockSummoner({
+      scene, player,
+      onMesh: (mesh) => bindPBREnvironment(mesh),
+    });
 
     // Terrain sculpting (raise/lower/flatten brushes + settings sidebar). It
     // rebuilds the controller's terrain collider after each stroke.
@@ -932,14 +943,6 @@
 
     // Avatar customization (shape sliders + textures/materials, two tabs).
     const avatarEditor = new AvatarEditor({ avatar, player });
-
-    // Minecraft-style scrolling cloud deck (horizontal plane + tiled texture).
-    const clouds = new CloudLayer({ scene, camera, sky });
-    clouds.init();
-
-    // Sky tweaking (sun direction + atmospheric scattering). Moves `sun` so the
-    // light follows the sky's sun.
-    const skyEditor = new SkyEditor({ sky, light: sun, renderer, clouds });
 
     // Right-click world editing: blocks, terrain, avatar, or sky.
     const editor = new WorldEditor({
@@ -1035,14 +1038,24 @@
       renderer.setSize(innerWidth, innerHeight);
     });
 
+    syncEnvironmentLighting = () => {
+      const elevationMix = THREE.MathUtils.clamp(
+        (skyEditor.elevation - ELEVATION_MIN) / (ELEVATION_MAX - ELEVATION_MIN), 0, 1,
+      );
+      const intensity = THREE.MathUtils.lerp(skyEditor.envIntensityMin, skyEditor.envIntensityMax, elevationMix);
+      scene.environmentIntensity = intensity;
+      for (const m of envMaterials) m.envMapIntensity = intensity;
+      terrain.setSunDirection(sky.material.uniforms.sunPosition.value);
+    };
+    syncEnvironmentLighting();
+
     const clock = new THREE.Clock();
     renderer.setAnimationLoop(() => {
       const dt = clock.getDelta();
       terrain.update(clock.elapsedTime); // animate the water
+      syncEnvironmentLighting();
       avatar.update(dt);                 // pose, physics, blink, look-at
       player.update(dt);                 // movement, grounding, chase camera
-      sun.target.position.copy(player.avatar.group.position);
-      sun.target.position.y = 0;
       multiplayer.update(dt);            // broadcast local pose to peers
       multiplayer.tickRemotes(dt);       // interpolate remote avatars
       worldIO.tickAgents(dt);            // imported agent avatars

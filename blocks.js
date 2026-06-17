@@ -24,9 +24,10 @@ const _wq = new THREE.Quaternion();
 const _ws = new THREE.Vector3();
 
 export class BlockSummoner {
-  constructor({ scene, player, max = 200 }) {
+  constructor({ scene, player, max = 200, onMesh = null }) {
     this.scene = scene;
     this.player = player;
+    this.onMesh = onMesh;
     this.world = player.world;
     this.scale = player.scale;
     this.max = max;
@@ -61,6 +62,7 @@ export class BlockSummoner {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.scene.add(mesh);
+    this.onMesh?.(mesh);
 
     const block = { mesh, body, collider };
     mesh.userData.block = block;

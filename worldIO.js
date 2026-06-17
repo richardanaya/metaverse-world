@@ -223,6 +223,8 @@ export class WorldIO {
       mieCoefficient: u.mieCoefficient.value,
       mieDirectionalG: u.mieDirectionalG.value,
       exposure: this.renderer.toneMappingExposure,
+      envIntensityMin: s.envIntensityMin,
+      envIntensityMax: s.envIntensityMax,
     };
     if (this.clouds) Object.assign(out, this.clouds.getAtmosphereSettings());
     return out;
@@ -412,6 +414,8 @@ export class WorldIO {
     if (data.mieCoefficient != null) u.mieCoefficient.value = data.mieCoefficient;
     if (data.mieDirectionalG != null) u.mieDirectionalG.value = data.mieDirectionalG;
     if (data.exposure != null) this.renderer.toneMappingExposure = data.exposure;
+    if (data.envIntensityMin != null) s.envIntensityMin = data.envIntensityMin;
+    if (data.envIntensityMax != null) s.envIntensityMax = data.envIntensityMax;
     s._updateSun();
     this.clouds?.applyAtmosphereSettings(data);
   }

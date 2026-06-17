@@ -1,5 +1,5 @@
 // Fancy-style voxel clouds — procedural mask spawns world-aligned 3D puffs.
-// One texel → one soft cumulus volume; two layers; wind scroll.
+// One texel → one soft rounded-cuboid puff; three stacked layers; wind scroll.
 
 import * as THREE from 'three';
 
@@ -23,6 +23,8 @@ const PUFF_VERT = /* glsl */`
 const PUFF_FRAG = /* glsl */`
   uniform vec3 uColor;
   uniform float uOpacity;
+  uniform float uRoundness;
+  uniform float uSoftness;
   uniform vec3 uFogColor;
   uniform float uFogNear;
   uniform float uFogFar;
@@ -38,27 +40,57 @@ const PUFF_FRAG = /* glsl */`
     return fract((p3.x + p3.y) * p3.z);
   }
 
+  float sdRoundBox(vec3 p, vec3 halfSize, float cornerR) {
+    vec3 q = abs(p) - halfSize + cornerR;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - cornerR;
+  }
+
+  float roundedBoxDensity(vec3 p, vec3 halfSize, float cornerR, float softness) {
+    return smoothstep(0.04 + softness * 0.04, -0.12 - softness * 0.14, sdRoundBox(p, halfSize, cornerR));
+  }
+
+  float roundedBoxLobe(vec3 p, vec3 center, vec3 halfSize, float cornerR, float softness) {
+    return roundedBoxDensity(p - center, halfSize, cornerR, softness);
+  }
+
   void main() {
+    // Unit box local space; instance scale turns each puff into a world-aligned rounded cuboid.
     vec3 p = vLocalPos;
-    p.x *= 0.9 + vSeed * 0.16;
-    p.z *= 0.9 + (1.0 - vSeed) * 0.16;
+    p.x *= 0.92 + vSeed * 0.14;
+    p.z *= 0.92 + (1.0 - vSeed) * 0.14;
 
-    // Flat-bottom cumulus dome in world-aligned local space.
     const float baseY = -0.36;
-    vec3 above = vec3(p.x, max(p.y - baseY, 0.0) * 1.1, p.z);
-    float dome = length(above);
-    float body = smoothstep(1.22, 0.08, dome);
+    vec3 halfSize = vec3(0.46, 0.34 + vSeed * 0.05, 0.46);
+    float cornerR = uRoundness + vSeed * 0.04;
+    vec3 bodyCenter = vec3(0.0, 0.05, 0.0);
+    float body = roundedBoxDensity(p - bodyCenter, halfSize, cornerR, uSoftness);
 
-    float footprint = smoothstep(0.98, 0.42, length(p.xz));
-    float slab = smoothstep(baseY + 0.14, baseY - 0.08, p.y) * footprint;
-    float shape = max(body, slab * 0.88);
+    float footprint = smoothstep(0.96, 0.42, length(p.xz / vec2(halfSize.x, halfSize.z)));
+    float slab = smoothstep(baseY + 0.12, baseY - 0.06, p.y) * footprint;
+
+    vec2 off1 = vec2(0.18 * (vSeed - 0.5), 0.14 * (hash21(vec2(vSeed, 1.7)) - 0.5));
+    vec2 off2 = vec2(-0.2 * (hash21(vec2(vSeed, 2.9)) - 0.5), 0.12 * (vSeed - 0.35));
+    vec2 off3 = vec2(0.1 * (hash21(vec2(vSeed, 4.1)) - 0.5), -0.17 * (hash21(vec2(vSeed, 5.3)) - 0.5));
+    vec2 off4 = vec2(0.04 * (hash21(vec2(vSeed, 6.5)) - 0.5), 0.06 * (hash21(vec2(vSeed, 7.7)) - 0.5));
+    float lobeR = max(0.04, cornerR * 0.68);
+    float l1 = roundedBoxLobe(p, vec3(off1.x, -0.02, off1.y), vec3(0.3, 0.24, 0.3), lobeR, uSoftness);
+    float l2 = roundedBoxLobe(p, vec3(off2.x, 0.12, off2.y), vec3(0.26, 0.21, 0.26), lobeR * 0.92, uSoftness);
+    float l3 = roundedBoxLobe(p, vec3(off3.x, 0.26, off3.y), vec3(0.22, 0.18, 0.22), lobeR * 0.84, uSoftness);
+    float l4 = roundedBoxLobe(p, vec3(off4.x, 0.38, off4.y), vec3(0.17, 0.14, 0.17), lobeR * 0.76, uSoftness);
+    float towers = max(l1, max(l2, max(l3, l4 * 0.88)));
+
+    float shape = max(max(body, slab * 0.86), towers);
 
     float wisp = hash21(vWorldPos.xz * 0.04 + vSeed * 9.0);
-    float edge = smoothstep(0.8, 0.15, dome);
-    float alpha = shape * (0.55 + edge * 0.45) * (0.88 + wisp * 0.12) * uOpacity;
+    float edge = smoothstep(0.05, -0.14 - uSoftness * 0.1, sdRoundBox(p - bodyCenter, halfSize, cornerR));
+    float heightNorm = clamp((p.y - baseY) / 0.82, 0.0, 1.0);
+    float topFade = mix(1.0, 0.65 + wisp * 0.25, smoothstep(0.45, 0.98, heightNorm));
+    float bellyShadow = mix(0.82, 1.0, smoothstep(baseY, baseY + 0.22, p.y));
+    float alpha = shape * (0.55 + edge * 0.45) * (0.88 + wisp * 0.12) * topFade * bellyShadow * uOpacity;
     if (alpha < 0.01) discard;
 
-    vec3 col = uColor * (0.94 + wisp * 0.06);
+    vec3 col = uColor * mix(0.86, 1.12, heightNorm) * (0.94 + wisp * 0.06);
+    col *= mix(vec3(0.94, 0.96, 1.04), vec3(1.0), heightNorm);
     if (uFogEnabled > 0.5) {
       float fogDepth = length(vWorldPos - cameraPosition);
       float fogFactor = smoothstep(uFogNear, uFogFar, fogDepth);
@@ -70,11 +102,13 @@ const PUFF_FRAG = /* glsl */`
   }
 `;
 
-function createPuffMaterial(color, opacity) {
+function createPuffMaterial(color, opacity, roundness, softness) {
   return new THREE.ShaderMaterial({
     uniforms: {
       uColor: { value: color.clone() },
       uOpacity: { value: opacity },
+      uRoundness: { value: roundness },
+      uSoftness: { value: softness },
       uFogColor: { value: new THREE.Color(0x9fb7d5) },
       uFogNear: { value: 300 },
       uFogFar: { value: 700 },
@@ -91,18 +125,29 @@ function createPuffMaterial(color, opacity) {
 const MASK_SIZE = 256;
 
 const LAYERS = [
-  { yOff: 0, thickness: 10, opacityMul: 0.44, phaseU: 0, phaseV: 0 },
-  { yOff: 6, thickness: 8.5, opacityMul: 0.34, phaseU: 128, phaseV: 0 },
+  { yOff: 0, thickness: 13, opacityMul: 0.4, phaseU: 0, phaseV: 0 },
+  { yOff: 4.5, thickness: 10.5, opacityMul: 0.3, phaseU: 64, phaseV: 64 },
+  { yOff: 9, thickness: 11, opacityMul: 0.28, phaseU: 128, phaseV: 0 },
 ];
 
 const DEFAULTS = {
   enabled: true,
   altitude: 80,
   opacity: 0.95,
-  windSpeed: 0.018,
+  windSpeed: 0.045,
   windDirection: 255,
   tile: 6,
   cloudColor: new THREE.Color(0xf2f6fc),
+  autoTint: true,
+  puffScale: 1,
+  layerHeight: 1,
+  coverage: 0.5,
+  noiseSeed: 42,
+  noiseScale: 0.028,
+  noiseOctaves: 5,
+  noiseJitter: 0.08,
+  roundness: 0.16,
+  softness: 0.2,
 };
 
 function floorMod(n, m) {
@@ -110,7 +155,13 @@ function floorMod(n, m) {
 }
 
 // Procedural 256×256 spawn mask — chunky binary noise (MC-style layout, no asset).
-function createCloudMask(seed = 42) {
+function createCloudMask({
+  seed = 42,
+  coverage = 0.5,
+  noiseScale = 0.028,
+  noiseOctaves = 5,
+  noiseJitter = 0.08,
+} = {}) {
   const rng = (() => {
     let s = seed >>> 0;
     return () => {
@@ -144,8 +195,9 @@ function createCloudMask(seed = 42) {
     for (let x = 0; x < MASK_SIZE; x++) {
       let v = 0;
       let amp = 0.55;
-      let freq = 0.028;
-      for (let o = 0; o < 5; o++) {
+      let freq = noiseScale;
+      const octaves = Math.max(1, Math.min(7, Math.round(noiseOctaves)));
+      for (let o = 0; o < octaves; o++) {
         v += amp * vnoise(x * freq + seed * 0.01, y * freq + seed * 0.013);
         freq *= 1.95;
         amp *= 0.52;
@@ -156,8 +208,8 @@ function createCloudMask(seed = 42) {
 
   const data = new Uint8Array(MASK_SIZE * MASK_SIZE);
   for (let i = 0; i < data.length; i++) {
-    const n = lattice[i] + (rng() - 0.5) * 0.08;
-    data[i] = n > 0.5 ? 255 : 0;
+    const n = lattice[i] + (rng() - 0.5) * noiseJitter;
+    data[i] = n > coverage ? 255 : 0;
   }
   return data;
 }
@@ -194,7 +246,7 @@ export class CloudLayer {
   }
 
   init() {
-    this._mask = createCloudMask();
+    this._regenMask();
     this._applyPieceSize();
 
     for (let li = 0; li < LAYERS.length; li++) {
@@ -202,6 +254,8 @@ export class CloudLayer {
       const mat = createPuffMaterial(
         this.params.cloudColor,
         this.params.opacity * layer.opacityMul,
+        this.params.roundness,
+        this.params.softness,
       );
 
       const geo = new THREE.BoxGeometry(1, 1, 1);
@@ -254,6 +308,25 @@ export class CloudLayer {
     for (const { layer, material } of this._layers) {
       material.uniforms.uOpacity.value = p.opacity * layer.opacityMul;
     }
+  }
+
+  _applyShaderStyle() {
+    const p = this.params;
+    for (const { material } of this._layers) {
+      material.uniforms.uRoundness.value = p.roundness;
+      material.uniforms.uSoftness.value = p.softness;
+    }
+  }
+
+  _regenMask() {
+    const p = this.params;
+    this._mask = createCloudMask({
+      seed: p.noiseSeed,
+      coverage: p.coverage,
+      noiseScale: p.noiseScale,
+      noiseOctaves: p.noiseOctaves,
+      noiseJitter: p.noiseJitter,
+    });
   }
 
   _syncFog() {
@@ -332,13 +405,15 @@ export class CloudLayer {
 
         const wx = (g.cellX + dx) * piece + piece * (0.42 + h0 * 0.16);
         const wz = (g.cellZ + dz) * piece + piece * (0.42 + h1 * 0.16);
-        const sx = piece * (3.1 + h0 * 0.85);
-        const sy = layer.thickness * (1.25 + h2 * 0.65);
-        const sz = piece * (2.8 + h1 * 0.9);
+        const scale = this.params.puffScale;
+        const layerLift = this.params.layerHeight;
+        const sx = piece * (3.9 + h0 * 1.05) * scale;
+        const sy = layer.thickness * layerLift * (1.85 + h2 * 0.92) * scale;
+        const sz = piece * (3.5 + h1 * 1.1) * scale;
 
         this._dummy.position.set(
           wx - g.x,
-          this.params.altitude + layer.yOff + sy * 0.5,
+          this.params.altitude + layer.yOff * layerLift + sy * 0.5,
           wz - g.z,
         );
         this._dummy.rotation.set(0, 0, 0);
@@ -379,11 +454,29 @@ export class CloudLayer {
       cloudWindDirection: p.windDirection,
       cloudTile: p.tile,
       cloudColor: p.cloudColor.getHex(),
+      cloudAutoTint: p.autoTint,
+      cloudPuffScale: p.puffScale,
+      cloudLayerHeight: p.layerHeight,
+      cloudCoverage: p.coverage,
+      cloudNoiseSeed: p.noiseSeed,
+      cloudNoiseScale: p.noiseScale,
+      cloudNoiseOctaves: p.noiseOctaves,
+      cloudNoiseJitter: p.noiseJitter,
+      cloudRoundness: p.roundness,
+      cloudSoftness: p.softness,
     };
   }
 
   applyAtmosphereSettings(data = {}) {
     const p = this.params;
+    const prevNoise = {
+      seed: p.noiseSeed,
+      coverage: p.coverage,
+      noiseScale: p.noiseScale,
+      noiseOctaves: p.noiseOctaves,
+      noiseJitter: p.noiseJitter,
+    };
+
     if (data.cloudsEnabled != null) p.enabled = !!data.cloudsEnabled;
     if (data.cloudOpacity != null) p.opacity = data.cloudOpacity;
     if (data.cloudAltitude != null) p.altitude = data.cloudAltitude;
@@ -391,10 +484,28 @@ export class CloudLayer {
     if (data.cloudWindDirection != null) p.windDirection = data.cloudWindDirection;
     if (data.cloudTile != null) p.tile = data.cloudTile;
     if (data.cloudColor != null) p.cloudColor.setHex(data.cloudColor);
+    if (data.cloudAutoTint != null) p.autoTint = !!data.cloudAutoTint;
+    if (data.cloudPuffScale != null) p.puffScale = data.cloudPuffScale;
+    if (data.cloudLayerHeight != null) p.layerHeight = data.cloudLayerHeight;
+    if (data.cloudCoverage != null) p.coverage = data.cloudCoverage;
+    if (data.cloudNoiseSeed != null) p.noiseSeed = data.cloudNoiseSeed;
+    if (data.cloudNoiseScale != null) p.noiseScale = data.cloudNoiseScale;
+    if (data.cloudNoiseOctaves != null) p.noiseOctaves = data.cloudNoiseOctaves;
+    if (data.cloudNoiseJitter != null) p.noiseJitter = data.cloudNoiseJitter;
+    if (data.cloudRoundness != null) p.roundness = data.cloudRoundness;
+    if (data.cloudSoftness != null) p.softness = data.cloudSoftness;
+
+    const noiseChanged = prevNoise.seed !== p.noiseSeed
+      || prevNoise.coverage !== p.coverage
+      || prevNoise.noiseScale !== p.noiseScale
+      || prevNoise.noiseOctaves !== p.noiseOctaves
+      || prevNoise.noiseJitter !== p.noiseJitter;
+    if (noiseChanged) this._regenMask();
 
     this._applyPieceSize();
     this._applyOpacity();
     this._applyColors();
+    this._applyShaderStyle();
     this._syncVisibility();
     this._lastCell = { x: NaN, z: NaN, sx: NaN, sz: NaN };
     this._rebuildAll(true);
@@ -414,11 +525,14 @@ export class CloudLayer {
     this._rebuildAll(false);
     this._syncFog();
 
-    if (this.sky) {
+    if (this.sky && p.autoTint) {
       const sunY = this.sky.material.uniforms.sunPosition.value.y;
       const warm = smoothstep(0.0, 0.35, THREE.MathUtils.clamp(sunY, 0, 1));
-      p.cloudColor.setRGB(0.88 + warm * 0.12, 0.9 + warm * 0.07, 0.97 + warm * 0.03);
-      this._applyColors();
+      const tint = new THREE.Color(0xf2f6fc);
+      tint.setRGB(0.88 + warm * 0.12, 0.9 + warm * 0.07, 0.97 + warm * 0.03);
+      for (const { material } of this._layers) {
+        material.uniforms.uColor.value.copy(tint);
+      }
     }
   }
 

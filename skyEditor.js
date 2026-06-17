@@ -1,28 +1,38 @@
 // SkyEditor — a floating sidebar to tweak the Preetham Sky, opened from the
 // right-click menu ("Edit sky…") when you right-click empty sky.
 //
-// Controls the sun direction (elevation / azimuth — which also moves the scene's
-// directional light so lighting and sky stay in sync), the atmospheric scattering
+// Controls the sun direction (elevation / azimuth), the atmospheric scattering
 // uniforms (turbidity / rayleigh / mie / mie-G), renderer exposure, and the
-// Minecraft-style cloud layer (opacity, altitude, wind).
+// Minecraft-style cloud layer (shape, noise, wind, color).
 
 import * as THREE from 'three';
 import { showPanel, hidePanel } from './panelFade.js';
 
 export class SkyEditor {
-  constructor({ sky, light, renderer, clouds = null }) {
+  constructor({
+    sky,
+    light = null,
+    renderer,
+    clouds = null,
+    onSunChange = null,
+    envIntensityMin = 0.08,
+    envIntensityMax = 1.0,
+  }) {
     this.sky = sky;
     this.u = sky.material.uniforms;
     this.light = light;
     this.renderer = renderer;
     this.clouds = clouds;
+    this.onSunChange = onSunChange;
+    this.envIntensityMin = envIntensityMin;
+    this.envIntensityMax = envIntensityMax;
     this.active = false;
 
     // Derive the starting sun elevation/azimuth from the sky's current sun dir.
     const d = this.u.sunPosition.value;
     this.elevation = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(d.y, -1, 1)));
     this.azimuth = THREE.MathUtils.radToDeg(Math.atan2(d.x, d.z));
-    this.lightDist = light.position.length() || 220; // keep the light's distance
+    this.lightDist = light?.position.length() || 220;
 
     this._build();
   }
@@ -41,8 +51,24 @@ export class SkyEditor {
     this.panel.appendChild(title);
 
     this._section('Sun');
-    this._slider('Elevation', 0, 90, 0.5, this.elevation, (v) => { this.elevation = v; this._updateSun(); });
+    this._slider('Elevation', -20, 90, 0.5, this.elevation, (v) => { this.elevation = v; this._updateSun(); });
     this._slider('Azimuth', -180, 180, 1, this.azimuth, (v) => { this.azimuth = v; this._updateSun(); });
+
+    this._section('Environment');
+    this._slider('IBL min', 0, 2, 0.01, this.envIntensityMin, (v) => {
+      this.envIntensityMin = v;
+      if (this.envIntensityMin > this.envIntensityMax) this.envIntensityMax = this.envIntensityMin;
+      this._envMaxSlider?.set(this.envIntensityMax);
+      this.onSunChange?.();
+    });
+    this._envMinSlider = this._lastSlider;
+    this._slider('IBL max', 0, 2, 0.01, this.envIntensityMax, (v) => {
+      this.envIntensityMax = v;
+      if (this.envIntensityMax < this.envIntensityMin) this.envIntensityMin = this.envIntensityMax;
+      this._envMinSlider?.set(this.envIntensityMin);
+      this.onSunChange?.();
+    });
+    this._envMaxSlider = this._lastSlider;
 
     this._section('Atmosphere');
     this._slider('Turbidity', 0, 20, 0.1, this.u.turbidity.value, (v) => { this.u.turbidity.value = v; });
@@ -63,25 +89,67 @@ export class SkyEditor {
   }
 
   _buildCloudSection() {
-    const p = this.clouds.params;
+    const c = this.clouds;
+    const p = c.params;
     this._section('Clouds');
     this._checkbox('Enabled', p.enabled, (on) => {
-      this.clouds.applyAtmosphereSettings({ cloudsEnabled: on });
+      c.applyAtmosphereSettings({ cloudsEnabled: on });
     });
     this._slider('Opacity', 0, 1, 0.01, p.opacity, (v) => {
-      this.clouds.applyAtmosphereSettings({ cloudOpacity: v });
+      c.applyAtmosphereSettings({ cloudOpacity: v });
     });
     this._slider('Altitude (m)', 55, 140, 1, p.altitude, (v) => {
-      this.clouds.applyAtmosphereSettings({ cloudAltitude: v });
-    });
-    this._slider('Wind speed', 0, 0.04, 0.001, p.windSpeed, (v) => {
-      this.clouds.applyAtmosphereSettings({ cloudWindSpeed: v });
-    });
-    this._slider('Wind direction', 0, 360, 1, p.windDirection, (v) => {
-      this.clouds.applyAtmosphereSettings({ cloudWindDirection: v });
+      c.applyAtmosphereSettings({ cloudAltitude: v });
     });
     this._slider('Tiling', 3, 10, 0.5, p.tile, (v) => {
-      this.clouds.applyAtmosphereSettings({ cloudTile: v });
+      c.applyAtmosphereSettings({ cloudTile: v });
+    });
+
+    this._section('Cloud shape');
+    this._slider('Puff scale', 0.5, 2, 0.05, p.puffScale, (v) => {
+      c.applyAtmosphereSettings({ cloudPuffScale: v });
+    });
+    this._slider('Layer height', 0.5, 2, 0.05, p.layerHeight, (v) => {
+      c.applyAtmosphereSettings({ cloudLayerHeight: v });
+    });
+    this._slider('Corner roundness', 0.05, 0.35, 0.01, p.roundness, (v) => {
+      c.applyAtmosphereSettings({ cloudRoundness: v });
+    });
+    this._slider('Edge softness', 0, 0.5, 0.01, p.softness, (v) => {
+      c.applyAtmosphereSettings({ cloudSoftness: v });
+    });
+
+    this._section('Cloud noise');
+    this._slider('Coverage', 0.2, 0.8, 0.01, p.coverage, (v) => {
+      c.applyAtmosphereSettings({ cloudCoverage: v });
+    });
+    this._slider('Pattern scale', 0.01, 0.08, 0.001, p.noiseScale, (v) => {
+      c.applyAtmosphereSettings({ cloudNoiseScale: v });
+    });
+    this._slider('Detail (octaves)', 3, 7, 1, p.noiseOctaves, (v) => {
+      c.applyAtmosphereSettings({ cloudNoiseOctaves: v });
+    });
+    this._slider('Jitter', 0, 0.2, 0.005, p.noiseJitter, (v) => {
+      c.applyAtmosphereSettings({ cloudNoiseJitter: v });
+    });
+    this._slider('Seed', 0, 999, 1, p.noiseSeed, (v) => {
+      c.applyAtmosphereSettings({ cloudNoiseSeed: v });
+    });
+
+    this._section('Cloud wind');
+    this._slider('Speed', 0, 0.15, 0.001, p.windSpeed, (v) => {
+      c.applyAtmosphereSettings({ cloudWindSpeed: v });
+    });
+    this._slider('Direction', 0, 360, 1, p.windDirection, (v) => {
+      c.applyAtmosphereSettings({ cloudWindDirection: v });
+    });
+
+    this._section('Cloud color');
+    this._checkbox('Tint from sun', p.autoTint, (on) => {
+      c.applyAtmosphereSettings({ cloudAutoTint: on });
+    });
+    this._color('Color', p.cloudColor.getHex(), (hex) => {
+      c.applyAtmosphereSettings({ cloudColor: hex, cloudAutoTint: false });
     });
   }
 
@@ -109,6 +177,23 @@ export class SkyEditor {
     this.panel.appendChild(el);
   }
 
+  _color(label, hex, onInput) {
+    const row = document.createElement('label');
+    row.className = 'sky-row';
+    const head = document.createElement('div');
+    head.className = 'sky-row-head';
+    const cap = document.createElement('span');
+    cap.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.className = 'sky-color';
+    input.value = `#${hex.toString(16).padStart(6, '0')}`;
+    input.addEventListener('input', () => onInput(parseInt(input.value.slice(1), 16)));
+    head.append(cap);
+    row.append(head, input);
+    this.panel.appendChild(row);
+  }
+
   _slider(label, min, max, step, value, onInput) {
     const row = document.createElement('label');
     row.className = 'sky-row';
@@ -126,15 +211,21 @@ export class SkyEditor {
     head.append(cap, val);
     row.append(head, input);
     this.panel.appendChild(row);
+    this._lastSlider = {
+      set: (v) => {
+        input.value = v;
+        val.textContent = fmt(v);
+      },
+    };
   }
 
-  // Recompute the sun direction from elevation/azimuth, and aim both the sky and
-  // the scene's directional light at it.
+  // Recompute the sun direction from elevation/azimuth and update the sky.
   _updateSun() {
     const phi = THREE.MathUtils.degToRad(90 - this.elevation);
     const theta = THREE.MathUtils.degToRad(this.azimuth);
     const dir = new THREE.Vector3().setFromSphericalCoords(1, phi, theta);
     this.u.sunPosition.value.copy(dir);
-    this.light.position.copy(dir).multiplyScalar(this.lightDist);
+    if (this.light) this.light.position.copy(dir).multiplyScalar(this.lightDist);
+    this.onSunChange?.();
   }
 }
