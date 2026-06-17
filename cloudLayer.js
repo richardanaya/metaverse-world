@@ -1,19 +1,104 @@
-// Fancy-style voxel clouds — procedural mask drives instanced 12×12×4 translucent
-// prisms.  One texel → one cloud piece; two layers; wind scroll.
+// Fancy-style voxel clouds — procedural mask spawns world-aligned 3D puffs.
+// One texel → one soft cumulus volume; two layers; wind scroll.
 
 import * as THREE from 'three';
+
+const PUFF_VERT = /* glsl */`
+  attribute float instanceSeed;
+
+  varying vec3 vLocalPos;
+  varying vec3 vWorldPos;
+  varying float vSeed;
+
+  void main() {
+    vLocalPos = position;
+    vSeed = instanceSeed;
+
+    vec4 worldPos = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    vWorldPos = worldPos.xyz;
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+  }
+`;
+
+const PUFF_FRAG = /* glsl */`
+  uniform vec3 uColor;
+  uniform float uOpacity;
+  uniform vec3 uFogColor;
+  uniform float uFogNear;
+  uniform float uFogFar;
+  uniform float uFogEnabled;
+
+  varying vec3 vLocalPos;
+  varying vec3 vWorldPos;
+  varying float vSeed;
+
+  float hash21(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
+  void main() {
+    vec3 p = vLocalPos;
+    p.x *= 0.9 + vSeed * 0.16;
+    p.z *= 0.9 + (1.0 - vSeed) * 0.16;
+
+    // Flat-bottom cumulus dome in world-aligned local space.
+    const float baseY = -0.36;
+    vec3 above = vec3(p.x, max(p.y - baseY, 0.0) * 1.1, p.z);
+    float dome = length(above);
+    float body = smoothstep(1.22, 0.08, dome);
+
+    float footprint = smoothstep(0.98, 0.42, length(p.xz));
+    float slab = smoothstep(baseY + 0.14, baseY - 0.08, p.y) * footprint;
+    float shape = max(body, slab * 0.88);
+
+    float wisp = hash21(vWorldPos.xz * 0.04 + vSeed * 9.0);
+    float edge = smoothstep(0.8, 0.15, dome);
+    float alpha = shape * (0.55 + edge * 0.45) * (0.88 + wisp * 0.12) * uOpacity;
+    if (alpha < 0.01) discard;
+
+    vec3 col = uColor * (0.94 + wisp * 0.06);
+    if (uFogEnabled > 0.5) {
+      float fogDepth = length(vWorldPos - cameraPosition);
+      float fogFactor = smoothstep(uFogNear, uFogFar, fogDepth);
+      col = mix(col, uFogColor, fogFactor);
+      alpha *= 1.0 - fogFactor * 0.88;
+    }
+
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+function createPuffMaterial(color, opacity) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: color.clone() },
+      uOpacity: { value: opacity },
+      uFogColor: { value: new THREE.Color(0x9fb7d5) },
+      uFogNear: { value: 300 },
+      uFogFar: { value: 700 },
+      uFogEnabled: { value: 1 },
+    },
+    vertexShader: PUFF_VERT,
+    fragmentShader: PUFF_FRAG,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+}
 
 const MASK_SIZE = 256;
 
 const LAYERS = [
-  { yOff: 0, thickness: 4, opacityMul: 0.86, phaseU: 0, phaseV: 0 },
-  { yOff: 4, thickness: 4, opacityMul: 0.72, phaseU: 128, phaseV: 0 },
+  { yOff: 0, thickness: 10, opacityMul: 0.44, phaseU: 0, phaseV: 0 },
+  { yOff: 6, thickness: 8.5, opacityMul: 0.34, phaseU: 128, phaseV: 0 },
 ];
 
 const DEFAULTS = {
   enabled: true,
   altitude: 80,
-  opacity: 0.9,
+  opacity: 0.95,
   windSpeed: 0.018,
   windDirection: 255,
   tile: 6,
@@ -82,6 +167,12 @@ function smoothstep(edge0, edge1, x) {
   return t * t * (3 - 2 * t);
 }
 
+function cellHash(u, v, salt = 0) {
+  let h = Math.imul((u + salt * 17) ^ (v + salt * 31), 0x45d9f3b) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+  return (h & 0xffff) / 0xffff;
+}
+
 export class CloudLayer {
   constructor({ scene, camera, sky = null }) {
     this.scene = scene;
@@ -106,17 +197,18 @@ export class CloudLayer {
     this._mask = createCloudMask();
     this._applyPieceSize();
 
-    const geo = new THREE.BoxGeometry(1, 1, 1);
-
     for (let li = 0; li < LAYERS.length; li++) {
       const layer = LAYERS[li];
-      const mat = new THREE.MeshBasicMaterial({
-        color: this.params.cloudColor,
-        transparent: true,
-        opacity: this.params.opacity * layer.opacityMul,
-        fog: true,
-        depthWrite: false,
-      });
+      const mat = createPuffMaterial(
+        this.params.cloudColor,
+        this.params.opacity * layer.opacityMul,
+      );
+
+      const geo = new THREE.BoxGeometry(1, 1, 1);
+      geo.setAttribute(
+        'instanceSeed',
+        new THREE.InstancedBufferAttribute(new Float32Array(this._maxInstances), 1),
+      );
 
       const mesh = new THREE.InstancedMesh(geo, mat, this._maxInstances);
       mesh.count = 0;
@@ -133,6 +225,7 @@ export class CloudLayer {
 
     this._ready = true;
     this._syncVisibility();
+    this._syncFog();
     this._updateGroupPositions(this.camera.position);
     this._rebuildAll(true);
     return this;
@@ -151,13 +244,29 @@ export class CloudLayer {
   }
 
   _applyColors() {
-    for (const { material } of this._layers) material.color.copy(this.params.cloudColor);
+    for (const { material } of this._layers) {
+      material.uniforms.uColor.value.copy(this.params.cloudColor);
+    }
   }
 
   _applyOpacity() {
     const p = this.params;
     for (const { layer, material } of this._layers) {
-      material.opacity = p.opacity * layer.opacityMul;
+      material.uniforms.uOpacity.value = p.opacity * layer.opacityMul;
+    }
+  }
+
+  _syncFog() {
+    const fog = this.scene.fog;
+    const enabled = fog ? 1 : 0;
+    for (const { material } of this._layers) {
+      const u = material.uniforms;
+      u.uFogEnabled.value = enabled;
+      if (fog) {
+        u.uFogColor.value.copy(fog.color);
+        u.uFogNear.value = fog.near;
+        u.uFogFar.value = fog.far;
+      }
     }
   }
 
@@ -208,26 +317,35 @@ export class CloudLayer {
     const R = this._radius;
     const mask = this._mask;
     const g = this._groupOrigin(cam);
-    const size = piece * 0.98;
-
+    const seeds = mesh.geometry.getAttribute('instanceSeed');
     let count = 0;
+
     for (let dz = -R; dz <= R; dz++) {
       for (let dx = -R; dx <= R; dx++) {
         const tu = floorMod(g.cellX + dx + g.scrollGX + layer.phaseU, MASK_SIZE);
         const tv = floorMod(g.cellZ + dz + g.scrollGZ + layer.phaseV, MASK_SIZE);
         if (mask[tv * MASK_SIZE + tu] < 24) continue;
 
-        const wx = (g.cellX + dx) * piece + piece * 0.5;
-        const wz = (g.cellZ + dz) * piece + piece * 0.5;
+        const h0 = cellHash(tu, tv, layer.phaseU);
+        const h1 = cellHash(tu, tv, layer.phaseV + 3);
+        const h2 = cellHash(tu, tv, layer.phaseU + layer.phaseV);
+
+        const wx = (g.cellX + dx) * piece + piece * (0.42 + h0 * 0.16);
+        const wz = (g.cellZ + dz) * piece + piece * (0.42 + h1 * 0.16);
+        const sx = piece * (3.1 + h0 * 0.85);
+        const sy = layer.thickness * (1.25 + h2 * 0.65);
+        const sz = piece * (2.8 + h1 * 0.9);
 
         this._dummy.position.set(
           wx - g.x,
-          this.params.altitude + layer.yOff + layer.thickness * 0.5,
+          this.params.altitude + layer.yOff + sy * 0.5,
           wz - g.z,
         );
-        this._dummy.scale.set(size, layer.thickness, size);
+        this._dummy.rotation.set(0, 0, 0);
+        this._dummy.scale.set(sx, sy, sz);
         this._dummy.updateMatrix();
         mesh.setMatrixAt(count, this._dummy.matrix);
+        seeds.setX(count, h2);
         count++;
         if (count >= this._maxInstances) break;
       }
@@ -236,6 +354,7 @@ export class CloudLayer {
 
     mesh.count = count;
     mesh.instanceMatrix.needsUpdate = true;
+    seeds.needsUpdate = true;
   }
 
   _rebuildAll(force = false) {
@@ -293,6 +412,7 @@ export class CloudLayer {
 
     this._updateGroupPositions(cam);
     this._rebuildAll(false);
+    this._syncFog();
 
     if (this.sky) {
       const sunY = this.sky.material.uniforms.sunPosition.value.y;
