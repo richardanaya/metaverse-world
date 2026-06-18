@@ -475,6 +475,42 @@
     #topbar .conn-status.host .dot { color: #6fd08a; }
     #topbar .conn-status.offline .dot { color: #6a7a88; }
 
+    .camera-panel {
+      position: fixed; z-index: 25; right: 14px; top: 42px;
+      display: none; flex-direction: column; gap: 8px; padding: 14px; width: 260px;
+      max-height: calc(100vh - 64px); overflow-y: auto;
+      opacity: 0; pointer-events: none; transition: opacity .28s ease;
+      background: linear-gradient(155deg, rgba(13,21,32,.93), rgba(6,10,16,.95)) padding-box;
+      border: 1px solid var(--line); border-radius: 3px;
+      box-shadow: 0 18px 50px rgba(0,0,0,.55), inset 0 0 0 1px rgba(124,176,216,.04), inset 0 1px 0 rgba(160,200,235,.10);
+      backdrop-filter: blur(7px) saturate(115%); -webkit-backdrop-filter: blur(7px) saturate(115%);
+      color: var(--text); font-family: var(--sans); scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
+    }
+    .camera-panel.is-visible { opacity: 1; pointer-events: auto; }
+    .camera-panel::before, .camera-panel::after { content:""; position:absolute; width:13px; height:13px; pointer-events:none; opacity:.85; }
+    .camera-panel::before { left:-1px; top:-1px; border-left:1px solid var(--accent); border-top:1px solid var(--accent); }
+    .camera-panel::after { right:-1px; bottom:-1px; border-right:1px solid var(--accent); border-bottom:1px solid var(--accent); }
+    .camera-panel-title {
+      font: 600 11px/1.2 var(--mono); text-transform: uppercase; letter-spacing: .2em;
+      color: var(--accent); padding: 1px 0 9px; margin-bottom: 1px; border-bottom: 1px solid var(--line);
+    }
+    .camera-panel-title::before { content: "▍ /"; color: var(--accent-2); letter-spacing: 0; margin-right: 1px; }
+    .camera-section {
+      font: 600 9.5px var(--mono); text-transform: uppercase; letter-spacing: .2em;
+      color: var(--dim); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-top: 8px;
+    }
+    .camera-section::before { content: "/"; color: var(--accent); margin-right: 3px; }
+    .camera-row { display: flex; flex-direction: column; gap: 3px; }
+    .camera-row-head { display: flex; justify-content: space-between; font: 10px var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--dim); }
+    .camera-row-head b { color: var(--accent-2); font-weight: 600; }
+    .camera-row input[type=range] { -webkit-appearance: none; appearance: none; height: 14px; background: transparent; cursor: pointer; }
+    .camera-row input[type=range]::-webkit-slider-runnable-track { height: 2px; background: linear-gradient(90deg, var(--accent), rgba(124,178,221,.18)); }
+    .camera-row input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 9px; height: 9px; margin-top: -3.5px; transform: rotate(45deg); background: var(--accent-2); border: 1px solid var(--accent); box-shadow: 0 0 8px rgba(124,178,221,.7); }
+    .camera-row select { width: 100%; color: var(--text); background: rgba(18,28,40,.55); border: 1px solid var(--line); border-radius: 2px; padding: 4px; }
+    .camera-check { display: flex; align-items: center; gap: 8px; font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text); }
+    .camera-check input { accent-color: var(--accent); }
+    .camera-done { cursor: pointer; padding: 8px 0; font: 600 11px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--accent-2); background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 2px; }
+
     .connect-panel {
       position: fixed; z-index: 25; left: 50%; top: 50%; transform: translate(-50%, -50%);
       display: flex; flex-direction: column; gap: 8px; padding: 14px; width: min(420px, 92vw);
@@ -671,9 +707,53 @@
     <span>SRVC <b id="topbar-peers">1 ONLINE</b></span>
     <span>SYS TIME <b data-clock>--:--:--</b></span>
     <span id="topbar-conn" class="conn-status offline"><span class="dot">●</span> <span id="topbar-conn-text">LOCAL</span></span>
+    <button id="camera-btn" class="topbar-btn" type="button">Camera</button>
     <button id="import-btn" class="topbar-btn" type="button">Import</button>
     <button id="export-btn" class="topbar-btn" type="button">Export</button>
     <button id="connect-btn" class="topbar-btn" type="button">Connect</button>
+  </div>
+
+  <div id="camera-panel" class="camera-panel" aria-label="Camera settings">
+    <div class="camera-panel-title">Camera</div>
+    <div class="camera-section">Color</div>
+    <label class="camera-row">
+      <span class="camera-row-head"><span>Tone map</span></span>
+      <select id="camera-tone-map"></select>
+    </label>
+    <label class="camera-row">
+      <span class="camera-row-head"><span>Exposure</span><b id="camera-exposure-value">0.60</b></span>
+      <input id="camera-exposure" type="range" min="0" max="2" step="0.01" value="0.6" />
+    </label>
+    <label class="camera-row">
+      <span class="camera-row-head"><span>FOV</span><b id="camera-fov-value">50°</b></span>
+      <input id="camera-fov" type="range" min="30" max="85" step="1" value="50" />
+    </label>
+    <div class="camera-section">Depth of field</div>
+    <label class="camera-check"><input id="camera-dof-enabled" type="checkbox" checked /> Depth of field</label>
+    <label class="camera-check"><input id="camera-dof-auto" type="checkbox" checked /> Focus on camera target</label>
+    <label class="camera-row">
+      <span class="camera-row-head"><span>Focus distance</span><b id="camera-dof-focus-value">55m</b></span>
+      <input id="camera-dof-focus" type="range" min="1" max="220" step="1" value="55" />
+    </label>
+    <label class="camera-row">
+      <span class="camera-row-head"><span>Aperture</span><b id="camera-dof-aperture-value">0.00032</b></span>
+      <input id="camera-dof-aperture" type="range" min="0" max="0.0006" step="0.00001" value="0.00032" />
+    </label>
+    <label class="camera-row">
+      <span class="camera-row-head"><span>Max blur</span><b id="camera-dof-maxblur-value">0.003</b></span>
+      <input id="camera-dof-maxblur" type="range" min="0" max="0.03" step="0.001" value="0.003" />
+    </label>
+    <div class="camera-section">Render</div>
+    <label class="camera-row">
+      <span class="camera-row-head"><span>AA samples</span></span>
+      <select id="camera-aa-samples">
+        <option value="0">Off</option>
+        <option value="2">2x</option>
+        <option value="4" selected>4x</option>
+        <option value="8">8x</option>
+      </select>
+    </label>
+    <button id="camera-done" class="camera-done" type="button">Done</button>
   </div>
 
   <div id="hud">
@@ -765,6 +845,10 @@
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
     import { Avatar } from 'metaverse-avatar';
     import {
       TerrainRegion, loadPBRTextureSet,
@@ -855,8 +939,127 @@
     const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 900);
     camera.position.set(40, 40, 60);
 
+    const renderTarget = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 4 });
+    const composer = new EffectComposer(renderer, renderTarget);
+    composer.setPixelRatio(devicePixelRatio);
+    composer.setSize(innerWidth, innerHeight);
+    composer.addPass(new RenderPass(scene, camera));
+    const dofPass = new BokehPass(scene, camera, {
+      focus: 55,
+      aperture: 0.00032,
+      maxblur: 0.003,
+    });
+    composer.addPass(dofPass);
+    const outputPass = new OutputPass();
+    outputPass.toneMapping = renderer.toneMapping;
+    outputPass.toneMappingExposure = renderer.toneMappingExposure;
+    composer.addPass(outputPass);
+
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    const cameraSettings = { dofAutoFocus: true };
+    const updateDepthOfField = () => {
+      if (!dofPass.enabled || !cameraSettings.dofAutoFocus) return;
+      dofPass.uniforms.focus.value = camera.position.distanceTo(controls.target);
+      const focusValue = document.getElementById('camera-dof-focus-value');
+      const focusInput = document.getElementById('camera-dof-focus');
+      const focus = dofPass.uniforms.focus.value;
+      if (focusValue) focusValue.textContent = `${Math.round(focus)}m`;
+      if (focusInput) focusInput.value = String(THREE.MathUtils.clamp(Math.round(focus), 1, 220));
+    };
+
+    const setupCameraPanel = () => {
+      const panel = document.getElementById('camera-panel');
+      const toneMap = document.getElementById('camera-tone-map');
+      const exposure = document.getElementById('camera-exposure');
+      const exposureValue = document.getElementById('camera-exposure-value');
+      const fov = document.getElementById('camera-fov');
+      const fovValue = document.getElementById('camera-fov-value');
+      const dofEnabled = document.getElementById('camera-dof-enabled');
+      const dofAuto = document.getElementById('camera-dof-auto');
+      const dofFocus = document.getElementById('camera-dof-focus');
+      const dofFocusValue = document.getElementById('camera-dof-focus-value');
+      const dofAperture = document.getElementById('camera-dof-aperture');
+      const dofApertureValue = document.getElementById('camera-dof-aperture-value');
+      const dofMaxblur = document.getElementById('camera-dof-maxblur');
+      const dofMaxblurValue = document.getElementById('camera-dof-maxblur-value');
+      const aaSamples = document.getElementById('camera-aa-samples');
+
+      const toneMaps = [
+        ['No tone map', THREE.NoToneMapping],
+        ['Linear', THREE.LinearToneMapping],
+        ['Reinhard', THREE.ReinhardToneMapping],
+        ['Cineon', THREE.CineonToneMapping],
+        ['ACES Filmic', THREE.ACESFilmicToneMapping],
+        ['AgX', THREE.AgXToneMapping],
+        ['Neutral', THREE.NeutralToneMapping],
+      ].filter(([, value]) => value != null);
+      for (const [label, value] of toneMaps) {
+        const option = document.createElement('option');
+        option.value = String(value);
+        option.textContent = label;
+        toneMap.appendChild(option);
+      }
+      toneMap.value = String(renderer.toneMapping);
+
+      const show = () => {
+        panel.style.display = 'flex';
+        requestAnimationFrame(() => panel.classList.add('is-visible'));
+      };
+      const hide = () => {
+        panel.classList.remove('is-visible');
+        setTimeout(() => { if (!panel.classList.contains('is-visible')) panel.style.display = 'none'; }, 280);
+      };
+
+      document.getElementById('camera-btn')?.addEventListener('click', () => {
+        if (panel.classList.contains('is-visible')) hide(); else show();
+      });
+      document.getElementById('camera-done')?.addEventListener('click', hide);
+
+      toneMap.addEventListener('change', () => {
+        const value = Number(toneMap.value);
+        renderer.toneMapping = value;
+        outputPass.toneMapping = value;
+      });
+      exposure.addEventListener('input', () => {
+        renderer.toneMappingExposure = Number(exposure.value);
+        outputPass.toneMappingExposure = Number(exposure.value);
+        exposureValue.textContent = Number(exposure.value).toFixed(2);
+      });
+      fov.addEventListener('input', () => {
+        camera.fov = Number(fov.value);
+        camera.updateProjectionMatrix();
+        fovValue.textContent = `${Math.round(camera.fov)}°`;
+      });
+      dofEnabled.addEventListener('change', () => { dofPass.enabled = dofEnabled.checked; });
+      dofAuto.addEventListener('change', () => { cameraSettings.dofAutoFocus = dofAuto.checked; dofFocus.disabled = dofAuto.checked; });
+      dofFocus.addEventListener('input', () => {
+        dofPass.uniforms.focus.value = Number(dofFocus.value);
+        dofFocusValue.textContent = `${Math.round(Number(dofFocus.value))}m`;
+      });
+      dofAperture.addEventListener('input', () => {
+        dofPass.uniforms.aperture.value = Number(dofAperture.value);
+        dofApertureValue.textContent = Number(dofAperture.value).toFixed(5);
+      });
+      dofMaxblur.addEventListener('input', () => {
+        dofPass.uniforms.maxblur.value = Number(dofMaxblur.value);
+        dofMaxblurValue.textContent = Number(dofMaxblur.value).toFixed(3);
+      });
+      aaSamples.addEventListener('change', () => {
+        const samples = Number(aaSamples.value);
+        if ('samples' in composer.renderTarget1) composer.renderTarget1.samples = samples;
+        if ('samples' in composer.renderTarget2) composer.renderTarget2.samples = samples;
+      });
+
+      exposure.value = String(renderer.toneMappingExposure);
+      exposureValue.textContent = renderer.toneMappingExposure.toFixed(2);
+      fov.value = String(camera.fov);
+      fovValue.textContent = `${Math.round(camera.fov)}°`;
+      dofEnabled.checked = dofPass.enabled;
+      dofAuto.checked = cameraSettings.dofAutoFocus;
+      dofFocus.disabled = cameraSettings.dofAutoFocus;
+    };
+    setupCameraPanel();
 
     // ---- sky (Preetham atmospheric scattering skydome) --------------------
     // Scaled to sit inside the camera's far plane and recentered on the camera
@@ -1068,6 +1271,8 @@
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
+      composer.setPixelRatio(devicePixelRatio);
+      composer.setSize(innerWidth, innerHeight);
     });
 
     syncEnvironmentLighting = () => {
@@ -1109,10 +1314,11 @@
       sky.position.copy(camera.position); // keep the skydome centered on the camera
       clouds.update(dt);
       precipitation.update(dt);
-      renderer.render(scene, camera);
+      updateDepthOfField();
+      composer.render(dt);
     });
 
-    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, worldWind, worldSunDirection }; // TEMP debug handle
+    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, composer, dofPass, outputPass, worldWind, worldSunDirection }; // TEMP debug handle
     // Everything is up — let the boot screen enable its ENTER button.
     window.__bootReady?.();
   </script>
