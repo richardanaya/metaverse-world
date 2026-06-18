@@ -15,6 +15,7 @@ export class SkyEditor {
     renderer,
     clouds = null,
     onSunChange = null,
+    onWindChange = null,
     envIntensityMin = 1.0,
     envIntensityMax = 2.0,
   }) {
@@ -24,6 +25,7 @@ export class SkyEditor {
     this.renderer = renderer;
     this.clouds = clouds;
     this.onSunChange = onSunChange;
+    this.onWindChange = onWindChange;
     this.envIntensityMin = envIntensityMin;
     this.envIntensityMax = envIntensityMax;
     this.active = false;
@@ -139,9 +141,11 @@ export class SkyEditor {
     this._section('Cloud wind');
     this._slider('Speed', 0, 0.15, 0.001, p.windSpeed, (v) => {
       c.applyAtmosphereSettings({ cloudWindSpeed: v });
+      this.onWindChange?.({ speed: v, directionDeg: p.windDirection });
     });
     this._slider('Direction', 0, 360, 1, p.windDirection, (v) => {
       c.applyAtmosphereSettings({ cloudWindDirection: v });
+      this.onWindChange?.({ speed: p.windSpeed, directionDeg: v });
     });
 
     this._section('Cloud color');
