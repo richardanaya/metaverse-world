@@ -6,6 +6,7 @@
 // Minecraft-style cloud layer (shape, noise, wind, color).
 
 import * as THREE from 'three';
+import { DEFAULT_CLOUD_SETTINGS } from 'metaverse-sky';
 import { showPanel, hidePanel } from './panelFade.js';
 
 export class SkyEditor {
@@ -14,6 +15,7 @@ export class SkyEditor {
     light = null,
     renderer,
     clouds = null,
+    precipitation = null,
     onSunChange = null,
     onWindChange = null,
     envIntensityMin = 1.0,
@@ -24,6 +26,7 @@ export class SkyEditor {
     this.light = light;
     this.renderer = renderer;
     this.clouds = clouds;
+    this.precipitation = precipitation;
     this.onSunChange = onSunChange;
     this.onWindChange = onWindChange;
     this.envIntensityMin = envIntensityMin;
@@ -80,6 +83,7 @@ export class SkyEditor {
     this._slider('Exposure', 0, 1, 0.01, this.renderer.toneMappingExposure, (v) => { this.renderer.toneMappingExposure = v; });
 
     if (this.clouds) this._buildCloudSection();
+    if (this.precipitation) this._buildPrecipitationSection();
 
     const done = document.createElement('button');
     done.className = 'sky-done';
@@ -96,6 +100,9 @@ export class SkyEditor {
     this._section('Clouds');
     this._checkbox('Enabled', p.enabled, (on) => {
       c.applyAtmosphereSettings({ cloudsEnabled: on });
+    });
+    this._checkbox('High quality', p.quality > 0, (on) => {
+      c.applyAtmosphereSettings({ cloudQuality: on ? 1 : 0 });
     });
     this._slider('Opacity', 0, 1, 0.01, p.opacity, (v) => {
       c.applyAtmosphereSettings({ cloudOpacity: v });
@@ -117,9 +124,12 @@ export class SkyEditor {
     this._slider('Corner roundness', 0.05, 0.35, 0.01, p.roundness, (v) => {
       c.applyAtmosphereSettings({ cloudRoundness: v });
     });
-    this._slider('Edge softness', 0, 0.5, 0.01, p.softness, (v) => {
+    this._slider('Edge softness', 0, 1, 0.01, p.softness, (v) => {
       c.applyAtmosphereSettings({ cloudSoftness: v });
     });
+    this._slider('Darkness', 0, 1, 0.01, p.darkness, (v) => {
+      c.applyAtmosphereSettings({ cloudDarkness: v });
+    }, (v) => (v < 0.2 ? 'Bright' : v < 0.45 ? 'Cloudy' : v < 0.7 ? 'Overcast' : 'Storm'));
 
     this._section('Cloud noise');
     this._slider('Coverage', 0.2, 0.8, 0.01, p.coverage, (v) => {
@@ -138,6 +148,23 @@ export class SkyEditor {
       c.applyAtmosphereSettings({ cloudNoiseSeed: v });
     });
 
+    const seedActions = document.createElement('div');
+    seedActions.className = 'seg';
+    const randomize = document.createElement('button');
+    randomize.type = 'button';
+    randomize.textContent = 'Randomize seed';
+    randomize.addEventListener('click', () => {
+      const seed = Math.floor(Math.random() * 1000);
+      c.applyAtmosphereSettings({ cloudNoiseSeed: seed });
+      this._cloudSeedSlider?.set(seed);
+    });
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.textContent = 'Reset clouds';
+    reset.addEventListener('click', () => this._resetClouds());
+    seedActions.append(randomize, reset);
+    this.panel.appendChild(seedActions);
+
     this._section('Cloud wind');
     this._slider('Speed', 0, 0.15, 0.001, p.windSpeed, (v) => {
       c.applyAtmosphereSettings({ cloudWindSpeed: v });
@@ -154,6 +181,47 @@ export class SkyEditor {
     });
     this._color('Color', p.cloudColor.getHex(), (hex) => {
       c.applyAtmosphereSettings({ cloudColor: hex, cloudAutoTint: false });
+    });
+  }
+
+  _buildPrecipitationSection() {
+    const p = this.precipitation.params;
+    this._section('Precipitation');
+    const buttons = document.createElement('div');
+    buttons.className = 'seg';
+    for (const type of ['none', 'rain', 'snow', 'hail']) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = type.charAt(0).toUpperCase() + type.slice(1);
+      b.classList.toggle('active', p.type === type);
+      b.addEventListener('click', () => {
+        this.precipitation.setPrecipitation({ type });
+        for (const el of buttons.children) el.classList.toggle('active', el === b);
+      });
+      buttons.appendChild(b);
+    }
+    this.panel.appendChild(buttons);
+    this._slider('Intensity', 0, 3, 0.01, p.intensity, (v) => {
+      this.precipitation.setPrecipitation({ intensity: v });
+    });
+    this._slider('Fall speed', 0.1, 3, 0.05, p.speed, (v) => {
+      this.precipitation.setPrecipitation({ speed: v });
+    }, (v) => `${Number(v).toFixed(1)}×`);
+    this._slider('Size', 0.2, 3, 0.05, p.size, (v) => {
+      this.precipitation.setPrecipitation({ size: v });
+    }, (v) => `${Number(v).toFixed(1)}×`);
+    this._slider('Wind drift', 0, 2, 0.05, p.windDrift, (v) => {
+      this.precipitation.setPrecipitation({ windDrift: v });
+    }, (v) => `${Number(v).toFixed(1)}×`);
+  }
+
+  _resetClouds() {
+    if (!this.clouds) return;
+    const d = DEFAULT_CLOUD_SETTINGS;
+    this.clouds.applyAtmosphereSettings({
+      ...d,
+      cloudColor: d.cloudColor,
+      cloudsEnabled: this.clouds.params.enabled,
     });
   }
 
@@ -198,14 +266,14 @@ export class SkyEditor {
     this.panel.appendChild(row);
   }
 
-  _slider(label, min, max, step, value, onInput) {
+  _slider(label, min, max, step, value, onInput, format = null) {
     const row = document.createElement('label');
     row.className = 'sky-row';
     const head = document.createElement('div');
     head.className = 'sky-row-head';
     const cap = document.createElement('span');
     const val = document.createElement('b');
-    const fmt = (v) => (step < 1 ? Number(v).toFixed(step < 0.01 ? 3 : 2) : String(Math.round(v)));
+    const fmt = format ?? ((v) => (step < 1 ? Number(v).toFixed(step < 0.01 ? 3 : 2) : String(Math.round(v))));
     cap.textContent = label;
     val.textContent = fmt(value);
     const input = document.createElement('input');
@@ -221,6 +289,7 @@ export class SkyEditor {
         val.textContent = fmt(v);
       },
     };
+    if (label === 'Seed') this._cloudSeedSlider = this._lastSlider;
   }
 
   // Recompute the sun direction from elevation/azimuth and update the sky.

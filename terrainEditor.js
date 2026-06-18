@@ -15,7 +15,7 @@
 
 import * as THREE from 'three';
 import { showPanel, hidePanel } from './panelFade.js';
-import { bindTerrainPainting, TERRAIN_TEXTURE_LAYERS, PBR_CHANNELS } from 'metaverse-terrain';
+import { bindTerrainPainting, TERRAIN_TEXTURE_LAYERS, PBR_CHANNELS, loadPBRTextureSet } from 'metaverse-terrain';
 
 const LAYER_LABELS = { sand: 'Sand', grass: 'Grass', rock: 'Rock', snow: 'Snow', water: 'Water' };
 const PBR_CHANNEL_LABELS = { metal: 'M', roughness: 'R', normal: 'N', ao: 'AO' };
@@ -37,9 +37,12 @@ export class TerrainEditor {
     this._binding = null;
     this._mode = null;            // active brush mode, or null = no brush
     this._dirty = false;
+    this._erosionStrength = 0.55;
+    this._erosionIterations = 1;
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
     this._textureBase = this._resolveTextureBase(terrain);
+    this._pbrSources = this._resolvePBRSources(terrain);
 
     this._layerRange = { min: LAYER_SLIDER_MIN, max: LAYER_SLIDER_MAX };
     this._layerHeights = {
@@ -95,6 +98,9 @@ export class TerrainEditor {
     this._addSlider('Strength', 0.05, 2, 0.05, this.terrain.brush.strength,
       (v) => this.terrain.setBrushStrength(v));
 
+    // Terrain mesh and procedural detail controls.
+    this._addTerrainDetail();
+
     // Layer height bands (water / grass / rock / snow transitions).
     this._addLayers();
 
@@ -103,6 +109,9 @@ export class TerrainEditor {
 
     // PBR surface + water shading.
     this._addPBR();
+
+    // Procedural terrain shading controls.
+    this._addShading();
 
     // Per-layer albedo + bundled PBR map previews.
     this._addTextures();
@@ -173,12 +182,60 @@ export class TerrainEditor {
     return { input, set: (on) => { input.checked = on; row.classList.toggle('is-off', !on); } };
   }
 
+  _addSelect(label, options, value, onChange) {
+    const row = document.createElement('label');
+    row.className = 'terrain-row';
+    const head = document.createElement('div');
+    head.className = 'terrain-row-head';
+    const cap = document.createElement('span');
+    cap.textContent = label;
+    const select = document.createElement('select');
+    for (const [val, text] of options) {
+      const option = document.createElement('option');
+      option.value = val;
+      option.textContent = text;
+      select.appendChild(option);
+    }
+    select.value = value;
+    select.addEventListener('change', () => onChange(select.value));
+    head.append(cap);
+    row.append(head, select);
+    this.panel.appendChild(row);
+    return { select, set: (v) => { select.value = v; } };
+  }
+
+  _addTerrainDetail() {
+    this._addLabel('Terrain detail');
+    this._terrainDetailControls = {
+      regionSize: this._addSlider('Region size', 64, 512, 8, this.terrain.regionSize,
+        (v) => { this.terrain.setRegionSize(v); this._markDirty(); this._flushCollider(); this._refreshHeightmap(); }, (v) => `${Math.round(v)}m`),
+      quality: this._addSelect('Terrain mesh', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], this.terrain.terrainQuality ?? 'medium', (v) => {
+        this.terrain.setTerrainQuality(v);
+        this._terrainDetailControls?.subdivisions?.set(this.terrain.renderSubdivisions);
+      }),
+      subdivisions: this._addSlider('Subdivisions', 1, 4, 1, this.terrain.renderSubdivisions,
+        (v) => { this.terrain.setRenderSubdivisions(v); this._terrainDetailControls?.quality?.set(this.terrain.terrainQuality); }, (v) => `${Math.round(v)}×`),
+      detail: this._addSlider('Detail strength', 0, 2, 0.05, this.terrain.terrainDetailStrength,
+        (v) => this.terrain.setTerrainDetailStrength(v), (v) => `${Number(v).toFixed(2)}m`),
+      cliff: this._addSlider('Cliff breakup', 0, 2, 0.05, this.terrain.terrainCliffStrength,
+        (v) => this.terrain.setTerrainCliffStrength(v)),
+      micro: this._addSlider('Micro detail', 0, 2, 0.05, this.terrain.terrainMicroDetailStrength,
+        (v) => this.terrain.setTerrainMicroDetailStrength(v)),
+      shoreline: this._addSlider('Shoreline', 0, 1, 0.01, this.terrain.shorelineStrength,
+        (v) => this.terrain.setShorelineStrength(v)),
+    };
+  }
+
   _addLayers() {
     this._addLabel('Layers');
     this._waterEnabled = this._addCheckbox('Water plane', this.terrain.waterEnabled, (on) => {
       this.terrain.setWaterEnabled(on);
       this._layerSlider?.classList.toggle('water-off', !on);
     });
+    const waterU = this.terrain.waterMesh?.material?.uniforms;
+    this._refractionEnabled = this._addCheckbox('Refraction', this.terrain.refractionEnabled, (on) => this.terrain.setRefractionEnabled(on));
+    this._waterDarkness = this._addSlider('Water darkness', 0, 1, 0.01, this.terrain.waterDarkness ?? waterU?.uWaterDarkness?.value ?? 0.5,
+      (v) => this.terrain.setWaterDarkness(v), (v) => (v < 0.2 ? 'Pristine' : v < 0.4 ? 'Clear' : v < 0.6 ? 'Ocean' : v < 0.8 ? 'Murky' : 'Swamp'));
 
     this._layerSlider = document.createElement('div');
     this._layerSlider.className = 'terrain-layer-slider';
@@ -316,12 +373,35 @@ export class TerrainEditor {
     this._pbrSliders = {
       normal: this._addSlider('Normal strength', 0, 2, 0.05, this.terrain.normalStrength,
         (v) => this.terrain.setNormalStrength(v)),
+      metal: this._addSlider('Metal', 0, 2, 0.01, this.terrain.terrainMetalIntensity ?? 1,
+        (v) => this._setTerrainPBRIntensity('terrainMetalIntensity', 'uTerrainMetalIntensity', 'setTerrainMetalIntensity', v), (v) => `${Math.round(v * 100)}%`),
+      roughness: this._addSlider('Roughness', 0, 2, 0.01, this.terrain.terrainRoughnessIntensity ?? 1.75,
+        (v) => this._setTerrainPBRIntensity('terrainRoughnessIntensity', 'uTerrainRoughnessIntensity', 'setTerrainRoughnessIntensity', v), (v) => `${Math.round(v * 100)}%`),
       ao: this._addSlider('Land AO', 0, 2, 0.01, this.terrain.terrainAOIntensity,
         (v) => this.terrain.setTerrainAOIntensity(v), (v) => `${Math.round(v * 100)}%`),
       ior: this._addSlider('Water IOR', 1.0, 1.55, 0.01, ior,
         (v) => this.terrain.setWaterIOR(v)),
     };
     this._waterPBR = this._addCheckbox('Water PBR', pbrOn, (on) => this.terrain.setPBREnabled(on));
+  }
+
+  _addShading() {
+    this._addLabel('Terrain shading');
+    this._shadingChecks = {
+      triplanar: this._addCheckbox('Triplanar', this.terrain.triplanarEnabled, (on) => this.terrain.setTriplanarEnabled(on)),
+      wetSand: this._addCheckbox('Wet sand', this.terrain.wetSandEnabled, (on) => this.terrain.setWetSandEnabled(on)),
+      snowSparkles: this._addCheckbox('Snow sparkles', this.terrain.snowSparklesEnabled, (on) => this.terrain.setSnowSparklesEnabled(on)),
+      noisePerturb: this._addCheckbox('Noise edges', this.terrain.noisePerturbEnabled, (on) => this.terrain.setNoisePerturbEnabled(on)),
+      cavityAO: this._addCheckbox('Cavity AO', this.terrain.cavityAOEnabled, (on) => this.terrain.setCavityAOEnabled(on)),
+    };
+    this._shadingSliders = {
+      moisture: this._addSlider('Moisture', 0, 1, 0.01, this.terrain.moisture,
+        (v) => this.terrain.setMoisture(v), (v) => (v < 0.2 ? 'Arid' : v < 0.4 ? 'Dry' : v < 0.6 ? 'Normal' : v < 0.8 ? 'Wet' : 'Swampy')),
+      biomeVariation: this._addSlider('Biome variation', 0, 1, 0.01, this.terrain.biomeVariation,
+        (v) => this.terrain.setBiomeVariation(v)),
+      proceduralNormal: this._addSlider('Procedural normals', 0, 1.5, 0.05, this.terrain.proceduralNormalStrength,
+        (v) => this.terrain.setProceduralNormalStrength(v)),
+    };
   }
 
   _syncTerrainControls() {
@@ -332,12 +412,38 @@ export class TerrainEditor {
     this._tilingSliders?.hexContrast?.set(t.hexTileContrast);
     this._tilingSliders?.blend?.set(t.textureBlendWidth);
     this._pbrSliders?.normal?.set(t.normalStrength);
+    this._pbrSliders?.metal?.set(t.terrainMetalIntensity ?? 1);
+    this._pbrSliders?.roughness?.set(t.terrainRoughnessIntensity ?? 1.75);
     this._pbrSliders?.ao?.set(t.terrainAOIntensity);
     this._pbrSliders?.ior?.set(u?.uWaterIOR?.value ?? 1.33);
     this._waterPBR?.set((u?.uPBREnabled?.value ?? 1) > 0.5);
+    this._refractionEnabled?.set(t.refractionEnabled);
+    this._waterDarkness?.set(t.waterDarkness ?? u?.uWaterDarkness?.value ?? 0.5);
+    this._shadingChecks?.triplanar?.set(t.triplanarEnabled);
+    this._shadingChecks?.wetSand?.set(t.wetSandEnabled);
+    this._shadingChecks?.snowSparkles?.set(t.snowSparklesEnabled);
+    this._shadingChecks?.noisePerturb?.set(t.noisePerturbEnabled);
+    this._shadingChecks?.cavityAO?.set(t.cavityAOEnabled);
+    this._shadingSliders?.moisture?.set(t.moisture);
+    this._shadingSliders?.biomeVariation?.set(t.biomeVariation);
+    this._shadingSliders?.proceduralNormal?.set(t.proceduralNormalStrength);
+  }
+
+  _setTerrainPBRIntensity(prop, uniform, setter, value) {
+    if (typeof this.terrain[setter] === 'function') {
+      this.terrain[setter](value);
+      return;
+    }
+    this.terrain[prop] = value;
+    const shader = this.terrain.terrainMesh?.material?.userData?.shader;
+    if (shader?.uniforms?.[uniform]) shader.uniforms[uniform].value = value;
   }
 
   _addActions() {
+    this._addLabel('Erosion');
+    this._erosionStrengthControl = this._addSlider('Erosion strength', 0, 1.5, 0.05, this._erosionStrength, (v) => { this._erosionStrength = v; });
+    this._erosionIterationsControl = this._addSlider('Erosion passes', 1, 4, 1, this._erosionIterations, (v) => { this._erosionIterations = Math.round(v); });
+
     const actions = document.createElement('div');
     actions.className = 'terrain-actions';
     const mkAction = (label, fn) => {
@@ -347,6 +453,7 @@ export class TerrainEditor {
       actions.appendChild(b);
     };
     mkAction('Randomize', () => { this.terrain.randomize(); this._markDirty(); this._flushCollider(); this._refreshHeightmap(); });
+    mkAction('Erode', () => { this.terrain.erode({ iterations: this._erosionIterations, strength: this._erosionStrength }); this._markDirty(); this._flushCollider(); this._refreshHeightmap(); });
     mkAction('Flatten', () => { this.terrain.level(); this._markDirty(); this._flushCollider(); this._refreshHeightmap(); });
     mkAction('Heightmap', () => this.terrain.downloadHeightmap());
     this.panel.appendChild(actions);
@@ -418,11 +525,27 @@ export class TerrainEditor {
     return null;
   }
 
+  // Seed per-layer PBR channel sources from the bundled CDN URLs so repacking
+  // a single channel keeps the other three at their current (default or
+  // previously-uploaded) source.
+  _resolvePBRSources(terrain) {
+    const base = this._textureBase;
+    const sources = {};
+    if (!base) return sources;
+    for (const layer of TERRAIN_TEXTURE_LAYERS) {
+      sources[layer] = {};
+      for (const ch of PBR_CHANNELS) {
+        sources[layer][ch] = `${base}/terrain-${layer}_${ch}.png`;
+      }
+    }
+    return sources;
+  }
+
   _addTextures() {
     this._addLabel('Textures');
     const hint = document.createElement('div');
     hint.className = 'terrain-hint';
-    hint.innerHTML = 'Click or drop an image onto <b>Albedo</b> to retexture a layer. PBR maps ship with the library.';
+    hint.innerHTML = 'Click or drop an image onto any slot to retexture. Albedo sets the layer color; M/R/N/AO replace PBR maps. Use × to revert.';
     this.panel.appendChild(hint);
 
     for (const layer of TERRAIN_TEXTURE_LAYERS) this.panel.appendChild(this._makeLayerCard(layer));
@@ -442,26 +565,96 @@ export class TerrainEditor {
     const slots = document.createElement('div');
     slots.className = 'terrain-slots';
     slots.appendChild(this._makeTextureSlot(layer, 'Albedo'));
-    for (const ch of PBR_CHANNELS) slots.appendChild(this._makePBRPreviewSlot(layer, ch));
+    for (const ch of PBR_CHANNELS) slots.appendChild(this._makePBRSlot(layer, ch));
     card.appendChild(slots);
     return card;
   }
 
-  _makePBRPreviewSlot(layer, channel) {
-    const b = document.createElement('button');
+  _makePBRSlot(layer, channel) {
+    const b = document.createElement('div');
     b.className = 'terrain-slot filled';
-    b.disabled = true;
+    b.setAttribute('role', 'button');
+    b.setAttribute('tabindex', '0');
     b.title = `${LAYER_LABELS[layer] ?? layer} · ${channel}`;
     const tag = document.createElement('span');
     tag.className = 'terrain-slot-tag';
     tag.textContent = PBR_CHANNEL_LABELS[channel] ?? channel;
     b.appendChild(tag);
 
-    const url = this._textureBase
-      ? `${this._textureBase}/terrain-${layer}_${channel}.png`
-      : null;
-    if (url) b.style.backgroundImage = `url("${url}")`;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'terrain-slot-x';
+    x.textContent = '×';
+    x.setAttribute('aria-label', `Detach ${LAYER_LABELS[layer] ?? layer} ${channel}`);
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._setPBRSource(layer, channel, null);
+    });
+    b.appendChild(x);
+
+    b._objUrl = null;
+    const show = (url, owned) => {
+      if (b._objUrl) URL.revokeObjectURL(b._objUrl);
+      b._objUrl = owned ? url : null;
+      b.style.backgroundImage = url ? `url("${url}")` : '';
+      b.classList.toggle('is-custom', !!owned);
+    };
+
+    const current = this._pbrSources[layer]?.[channel];
+    if (current) show(current, false);
+
+    const apply = (file) => {
+      if (!file?.type?.startsWith('image/')) return;
+      const url = URL.createObjectURL(file);
+      this._setPBRSource(layer, channel, url, () => show(url, true));
+    };
+
+    b.addEventListener('click', () => this._pickFile(apply));
+    b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this._pickFile(apply); } });
+    b.addEventListener('dragover', (e) => { e.preventDefault(); b.classList.add('drop'); });
+    b.addEventListener('dragleave', () => b.classList.remove('drop'));
+    b.addEventListener('drop', (e) => {
+      e.preventDefault();
+      b.classList.remove('drop');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) apply(file);
+    });
     return b;
+  }
+
+  // Repack and apply a PBR channel for a layer. `source` is a URL string or
+  // null (null reverts to the bundled default). `onApplied` runs after the
+  // uniform update succeeds.
+  async _setPBRSource(layer, channel, source, onApplied) {
+    if (!this._textureBase) return;
+    const sources = this._pbrSources[layer] ?? {};
+    const bundled = (ch) => `${this._textureBase}/terrain-${layer}_${ch}.png`;
+    sources[channel] = source ?? bundled(channel);
+    this._pbrSources[layer] = sources;
+
+    const cap = layer.charAt(0).toUpperCase() + layer.slice(1);
+    const isWater = layer === 'water';
+    const mat = isWater ? this.terrain.waterMesh?.material : this.terrain.terrainMesh?.material;
+    if (!mat) return;
+    const uniforms = isWater ? mat.uniforms : mat.userData?.shader?.uniforms;
+    if (!uniforms) return;
+
+    try {
+      if (channel === 'normal') {
+        const packed = await loadPBRTextureSet({ [layer]: { normal: sources.normal } });
+        const tex = packed[layer]?.normal;
+        if (tex) uniforms[`u${cap}Normal`].value = tex;
+      } else {
+        const packed = await loadPBRTextureSet({
+          [layer]: { metal: sources.metal, roughness: sources.roughness, ao: sources.ao },
+        });
+        const tex = packed[layer]?.mrao;
+        if (tex) uniforms[`u${cap}MRAO`].value = tex;
+      }
+      onApplied?.();
+    } catch (err) {
+      console.error(`Failed to repack ${layer}.${channel}:`, err);
+    }
   }
 
   _texturePreviewUrl(tex) {
@@ -496,13 +689,29 @@ export class TerrainEditor {
   }
 
   _makeTextureSlot(layer, label = 'Albedo') {
-    const b = document.createElement('button');
+    const b = document.createElement('div');
     b.className = 'terrain-slot';
+    b.setAttribute('role', 'button');
+    b.setAttribute('tabindex', '0');
     b.title = `${LAYER_LABELS[layer] ?? layer} · ${label}`;
     const tag = document.createElement('span');
     tag.className = 'terrain-slot-tag';
     tag.textContent = label;
     b.appendChild(tag);
+
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'terrain-slot-x';
+    x.textContent = '×';
+    x.setAttribute('aria-label', `Detach ${LAYER_LABELS[layer] ?? layer} ${label}`);
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this._textureBase) return;
+      const defaultUrl = `${this._textureBase}/terrain-${layer}.png`;
+      this.terrain.setTerrainTexture(layer, defaultUrl);
+      show(defaultUrl, false);
+    });
+    b.appendChild(x);
 
     b._objUrl = null;
     const show = (url, owned) => {
@@ -510,6 +719,7 @@ export class TerrainEditor {
       b._objUrl = owned ? url : null;
       b.style.backgroundImage = url ? `url("${url}")` : '';
       b.classList.toggle('filled', !!url);
+      b.classList.toggle('is-custom', !!owned);
     };
 
     const existing = this._texturePreviewUrl(this.terrain.textures?.[layer]);
@@ -522,6 +732,7 @@ export class TerrainEditor {
     };
 
     b.addEventListener('click', () => this._pickFile(apply));
+    b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this._pickFile(apply); } });
     b.addEventListener('dragover', (e) => { e.preventDefault(); b.classList.add('drop'); });
     b.addEventListener('dragleave', () => b.classList.remove('drop'));
     b.addEventListener('drop', (e) => {

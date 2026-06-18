@@ -114,6 +114,14 @@
     }
     .terrain-slot.filled .terrain-slot-tag { background: rgba(58, 90, 138, 0.8); }
     .terrain-slot:disabled { cursor: default; opacity: 0.92; }
+    .terrain-slot-x {
+      position: absolute; top: 2px; right: 2px; width: 15px; height: 15px;
+      display: none; align-items: center; justify-content: center; padding: 0;
+      border: 0; border-radius: 3px; background: rgba(5,9,14,.78); color: #e8ecf4;
+      font: 600 12px system-ui, sans-serif; line-height: 1; cursor: pointer; z-index: 2;
+    }
+    .terrain-slot.filled .terrain-slot-x { display: flex; }
+    .terrain-slot-x:hover { background: #c04a4a; color: #fff; }
     /* Floating avatar editor sidebar (tabbed) */
     .avatar-panel {
       position: fixed; z-index: 20; right: 14px; top: 50%; transform: translateY(-50%);
@@ -647,9 +655,8 @@
       "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
       "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar/index.js",
-      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.0/index.js",
+      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.3/index.js",
       "metaverse-sky": "https://cdn.jsdelivr.net/npm/metaverse-sky@0.1.0/index.js",
-      "metaverse-vegetation": "https://cdn.jsdelivr.net/npm/metaverse-vegetation@0.1.0/index.js",
       "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
     }
   }
@@ -764,8 +771,7 @@
       DEFAULT_WATER_LEVEL, DEFAULT_TEXTURE_HEIGHTS,
       DEFAULT_HEX_TILE_RATE, DEFAULT_HEX_TILE_CONTRAST, DEFAULT_TEXTURE_BLEND_WIDTH,
     } from 'metaverse-terrain';
-    import { createAtmosphereSky, CloudLayer } from 'metaverse-sky';
-    import { VegetationLayer, createVegetationPointsFromHeightMap } from 'metaverse-vegetation';
+    import { createAtmosphereSky, CloudLayer, Precipitation } from 'metaverse-sky';
     import { PlayerController } from './playerController.js';
     import { BlockSummoner } from './blocks.js';
     import { WorldEditor } from './worldEditor.js';
@@ -779,8 +785,8 @@
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
     const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar/models/';
-    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.0/texture';
-    const VEGETATION_TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-vegetation@0.1.0/textures';
+    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.3/texture';
+    const SKY_TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-sky@0.1.0/textures';
     const PBR_TEXTURE_URLS = {
       sand: {
         metal: `${TEXTURE_BASE}/terrain-sand_metal.png`,
@@ -884,16 +890,26 @@
       pbrTextures,
       regionSize: 256,
       seed: 42,
-      waterLevel: DEFAULT_WATER_LEVEL,
-      textureHeights: { ...DEFAULT_TEXTURE_HEIGHTS },
-      textureDensity: 20,
+      waterLevel: 28.0,
+      textureHeights: {
+        ...DEFAULT_TEXTURE_HEIGHTS,
+        sandMax: 29.0,
+        grassStart: 29.0,
+        grassEnd: 30.0,
+        rockStart: 30.0,
+        snowStart: 36.0,
+      },
+      textureDensity: 30,
       hexTileRate: DEFAULT_HEX_TILE_RATE,
       hexTileContrast: DEFAULT_HEX_TILE_CONTRAST,
       textureBlendWidth: DEFAULT_TEXTURE_BLEND_WIDTH,
       normalStrength: 1.0,
+      terrainMetalIntensity: 1.0,
+      terrainRoughnessIntensity: 1.75,
+      shorelineStrength: 0.9,
       terrainAOIntensity: 1.0,
       addBrushCursor: true, // brush ring preview while sculpting in the terrain editor
-      // Layer bands match example/editor: water 21.5m, grass 22.5m, rock 30m, snow 36m.
+      // Layer bands: water 28m, grass 29m, rock 30m, snow 36m.
     });
     scene.add(terrain.group);
 
@@ -919,62 +935,25 @@
     bindPBREnvironment(terrain.group);
     bindPBREnvironment(avatar.group);
 
-    const vegetationPoints = createVegetationPointsFromHeightMap({
-      heightMap: terrain.heightMap,
-      samples: terrain.samples,
-      regionSize: terrain.regionSize,
-      count: 1100,
-      seed: 42,
-      mix: [
-        { kind: 'fern', weight: 5, height: [0.65, 1.8], width: [1.0, 1.9] },
-        { kind: 'shrub', weight: 2.5, height: [0.8, 1.8], width: [1.0, 2.0] },
-        { kind: 'berryBush', weight: 1, height: [0.7, 1.5], width: [0.9, 1.7] },
-        { kind: 'pine', weight: 4, height: [18.0, 55.0], width: [2.0, 5.5], lean: [0.0, 0.025] },
-        { kind: 'broadleaf', weight: 0.8, height: [6.0, 18.0], width: [1.8, 4.0], density: 0.55 },
-      ],
-      filter: ({ x, y, z }) => {
-        if (Math.hypot(x, z) < 14) return false;
-        return y > terrain.waterLevel + 0.8 && y < (terrain.textureHeights?.snowStart ?? 36);
-      },
-    });
-    const vegetation = new VegetationLayer({
-      scene,
-      points: vegetationPoints,
-      seed: 42,
-      sunDirection: worldSunDirection,
-      windDirection: worldWind.direction,
-      windSpeed: worldWind.speed,
-      textureUrls: {
-        leaf: `${VEGETATION_TEXTURE_BASE}/leaf-cluster.png`,
-        branch: `${VEGETATION_TEXTURE_BASE}/branch.png`,
-        grass: `${VEGETATION_TEXTURE_BASE}/grass-blades.png`,
-        meadowGrass: `${VEGETATION_TEXTURE_BASE}/meadow-grass.png`,
-        dryGrass: `${VEGETATION_TEXTURE_BASE}/dry-grass.png`,
-        flower: `${VEGETATION_TEXTURE_BASE}/flower-head.png`,
-        flowerStem: `${VEGETATION_TEXTURE_BASE}/flower-stems.png`,
-        flowerWhite: `${VEGETATION_TEXTURE_BASE}/flower-white.png`,
-        flowerPurple: `${VEGETATION_TEXTURE_BASE}/flower-purple.png`,
-        pine: `${VEGETATION_TEXTURE_BASE}/pine-needles.png`,
-        fern: `${VEGETATION_TEXTURE_BASE}/fern.png`,
-        shrub: `${VEGETATION_TEXTURE_BASE}/shrub.png`,
-        shrubBase: `${VEGETATION_TEXTURE_BASE}/shrub-base.png`,
-        berries: `${VEGETATION_TEXTURE_BASE}/berries.png`,
-        autumn: `${VEGETATION_TEXTURE_BASE}/autumn-leaves.png`,
-        broadleaf: `${VEGETATION_TEXTURE_BASE}/broadleaf-canopy.png`,
-        bambooStalk: `${VEGETATION_TEXTURE_BASE}/bamboo-stalks.png`,
-        bambooLeaf: `${VEGETATION_TEXTURE_BASE}/bamboo-leaves.png`,
-      },
-      onMesh: (mesh) => bindPBREnvironment(mesh),
-    }).init();
-
     // Procedural scrolling voxel cloud deck (instanced, sun-lit puffs).
     const clouds = new CloudLayer({ scene, camera, sky, windDirection: worldWind.directionDeg, windSpeed: worldWind.speed });
     clouds.init();
+    const precipitation = new Precipitation({
+      scene,
+      camera,
+      sky,
+      type: 'none',
+      textures: {
+        rain: `${SKY_TEXTURE_BASE}/raindrop.png`,
+        snow: `${SKY_TEXTURE_BASE}/snowflake.png`,
+        hail: `${SKY_TEXTURE_BASE}/hailstone.png`,
+      },
+    }).init();
 
     let syncEnvironmentLighting = () => {};
     let syncWorldWind = () => {};
     const skyEditor = new SkyEditor({
-      sky, renderer, clouds,
+      sky, renderer, clouds, precipitation,
       onSunChange: () => syncEnvironmentLighting(),
       onWindChange: ({ directionDeg, speed }) => syncWorldWind({ directionDeg, speed }),
     });
@@ -1101,7 +1080,6 @@
       for (const m of envMaterials) m.envMapIntensity = intensity;
       terrain.setSunDirection(worldSunDirection);
       clouds.setSunDirection(worldSunDirection);
-      vegetation.setSunDirection(worldSunDirection);
     };
     syncWorldWind = ({ directionDeg = worldWind.directionDeg, speed = worldWind.speed } = {}) => {
       worldWind.directionDeg = directionDeg;
@@ -1112,8 +1090,8 @@
       terrain.setWindSpeed(worldWind.speed);
       clouds.setWindDirection(worldWind.direction);
       clouds.setWindSpeed(worldWind.speed);
-      vegetation.setWindDirection(worldWind.direction);
-      vegetation.setWindSpeed(worldWind.speed);
+      precipitation.setWindDirection(worldWind.direction);
+      precipitation.setWindSpeed(worldWind.speed);
     };
     syncEnvironmentLighting();
     syncWorldWind();
@@ -1130,11 +1108,11 @@
       worldIO.tickAgents(dt);            // imported agent avatars
       sky.position.copy(camera.position); // keep the skydome centered on the camera
       clouds.update(dt);
-      vegetation.update(clock.elapsedTime);
+      precipitation.update(dt);
       renderer.render(scene, camera);
     });
 
-    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, vegetation, worldWind, worldSunDirection }; // TEMP debug handle
+    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, worldWind, worldSunDirection }; // TEMP debug handle
     // Everything is up — let the boot screen enable its ENTER button.
     window.__bootReady?.();
   </script>
