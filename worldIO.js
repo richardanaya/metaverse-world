@@ -10,7 +10,10 @@ import { avatarEntityKey, parseAvatarEntityKey } from './agentName.js';
 import { showPanel, hidePanel } from './panelFade.js';
 
 const FORMAT = 'metaverse-world';
-const VERSION = 1;
+// v1: blocks stored in world (Y-up) coordinates.
+// v2: blocks stored in the Z-up authoring frame (z = height). v1 files are
+//      auto-converted on import via BlockSummoner.importState({ worldToZUp }).
+const VERSION = 2;
 const LOCO_GLB = 'https://cdn.jsdelivr.net/npm/metaverse-avatar/anims/UAL1_Standard.glb';
 const LOCO_STAND = 'Idle_Loop';
 
@@ -420,8 +423,10 @@ export class WorldIO {
     this.clouds?.applyAtmosphereSettings(data);
   }
 
-  _importObjects(data) {
-    if (data.blocks?.length) this.blocks.importState(data.blocks);
+  _importObjects(data, fileVersion = VERSION) {
+    if (data.blocks?.length) {
+      this.blocks.importState(data.blocks, { worldToZUp: fileVersion < 2 });
+    }
   }
 
   async importWorld(keys) {
@@ -432,7 +437,7 @@ export class WorldIO {
 
     if (keys.includes('terrain') && entities.terrain) await this._importTerrain(entities.terrain);
     if (keys.includes('atmosphere') && entities.atmosphere) this._importAtmosphere(entities.atmosphere);
-    if (keys.includes('objects') && entities.objects) this._importObjects(entities.objects);
+    if (keys.includes('objects') && entities.objects) this._importObjects(entities.objects, this._parsed.version ?? 1);
 
     for (const key of keys) {
       const agentName = parseAvatarEntityKey(key);

@@ -10,11 +10,16 @@
 // Edit-mode keyboard (Blender-style modal transforms):
 //   • Shift+left-click  — add / remove a block from the selection.
 //   • G / R / S         — start a modal Move / Rotate / Scale driven by the mouse.
-//       X / Y / Z       — while modal, lock the transform to that world axis.
+//       X / Y / Z       — while modal, lock the transform to that axis (a long
+//                         colored indicator line shows the locked axis).
 //       click / Enter   — confirm.   Esc / right-click — cancel (revert).
+//   • Gizmo drag        — left-click release commits; Esc cancels (reverts).
 //   • Shift+D           — duplicate the selection and start moving the copies.
 //   • Ctrl+P            — parent (link) the selection into one group.
 //   • Ctrl+Shift+P      — un-parent (unlink) the selection.
+//   • X                 — confirm-delete popup (no transform active). Press X
+//                         again / click Delete to confirm, or click away /
+//                         Esc to cancel. Delete / Backspace delete instantly.
 //   • Delete / Backspace— remove the selection.   Esc — finish editing.
 //
 // Multiple blocks transform together by parenting their meshes under a single
@@ -30,7 +35,8 @@ import { showPanel, hidePanel, isPanelOpen } from './panelFade.js';
 
 const CLICK_SLOP = 5; // px of pointer travel still counted as a click (not a drag)
 const HIGHLIGHT = 0x335577;
-const AXES = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+// Modal-transform axis directions are derived per-instance from the blocks root
+// (see constructor) so that the X/Y/Z keyboard locks match the Z-up gizmo.
 
 export class WorldEditor {
   constructor({ renderer, scene, camera, controls, terrain, blocks, avatar, terrainEditor, avatarEditor, skyEditor }) {
@@ -61,6 +67,14 @@ export class WorldEditor {
     this._pivot = new THREE.Group();
     scene.add(this._pivot);
 
+    // Blender-style axis indicator lines, shown while a modal transform has an
+    // axis locked (G/R/S then X/Y/Z). They're children of the pivot so they
+    // follow the selection and inherit its Z-up local frame — a line along
+    // local X/Y/Z matches the gizmo and the axis lock exactly. Long enough to
+    // span the viewport; drawn on top like the gizmo handles.
+    this._axisLines = this._buildAxisLines();
+    for (const line of Object.values(this._axisLines)) this._pivot.add(line);
+
     // Modal (keyboard) transform state, null when not transforming.
     this._modal = null;
     this._scaleAnchor = null;     // one-sided gizmo scaling anchor
@@ -71,9 +85,28 @@ export class WorldEditor {
     this._q = new THREE.Quaternion();
     this._plane = new THREE.Plane();
 
+    // Z-up authoring frame. Blocks live under `blocks.root` (rotated -90° about
+    // X, so local +Z = world +Y/up). The selection pivot inherits that same
+    // baseline rotation so the transform gizmo (in 'local' space) draws its
+    // blue Z handle pointing up, and the G/R/S axis locks below match it.
+    this._blocksRoot = blocks.root;
+    this._blocksRoot.updateMatrixWorld(true);
+    this._rootQuat = new THREE.Quaternion();
+    this._blocksRoot.getWorldQuaternion(this._rootQuat);
+    // World-space direction of each local authoring axis: local X -> world X,
+    // local Y -> world -Z, local Z -> world +Y (up).
+    this._axes = {
+      x: new THREE.Vector3(1, 0, 0).applyQuaternion(this._rootQuat),
+      y: new THREE.Vector3(0, 1, 0).applyQuaternion(this._rootQuat),
+      z: new THREE.Vector3(0, 0, 1).applyQuaternion(this._rootQuat),
+    };
+
     // ---- transform gizmo ----
     this.gizmo = new TransformControls(camera, this.dom);
     this.gizmo.setSize(0.9);
+    // 'local' space orients the gizmo to the pivot's world quaternion, which we
+    // keep aligned with the blocks root — so the blue Z handle points up.
+    this.gizmo.setSpace('local');
     this.gizmo.addEventListener('dragging-changed', (e) => {
       this.orbit.enabled = !e.value;
       if (e.value) this._onGizmoDragStart();
@@ -124,7 +157,8 @@ export class WorldEditor {
     make('Move (G)', () => this._setBaseMode('translate'), 'translate');
     make('Rotate (R)', () => this._setBaseMode('rotate'), 'rotate');
     make('Scale (S)', () => this._setBaseMode('scale'), 'scale');
-    make('Delete', () => this._deleteSelected(), null, 'danger');
+    make('Duplicate (Shift+D)', () => this._duplicateAndMove());
+    make('Delete (X)', () => this._confirmDeletePopup(), null, 'danger');
     make('Done', () => this._deselect(), null, 'done');
 
     const hint = document.createElement('div');
@@ -166,13 +200,14 @@ export class WorldEditor {
 
   // Place a new block flush against the clicked face (offset half a block along
   // the surface normal, so it sits next to / on top of the one you clicked).
+  // `point` and `normal` arrive in world (Y-up) space; blocks are authored in the
+  // Z-up local frame, so both are converted before placement.
   _addAgainst(point, normal) {
     const half = this.blocks.size / 2;
-    return this.blocks.create(
-      point.x + normal.x * half,
-      point.y + normal.y * half,
-      point.z + normal.z * half,
-    );
+    this._blocksRoot.updateMatrixWorld(true);
+    const lp = this.blocks.worldToLocalPoint(point, this._v);
+    const ln = this.blocks.worldToLocalDir(normal, this._v2);
+    return this.blocks.create(lp.x + ln.x * half, lp.y + ln.y * half, lp.z + ln.z * half);
   }
 
   // ---- picking --------------------------------------------------------
@@ -277,6 +312,16 @@ export class WorldEditor {
   _openSkyEditor() { this._deselect(); this._hideMenu(); this.terrainEditor?.close(); this.avatarEditor?.close(); this.skyEditor?.open(); }
 
   _onKey(e) {
+    // ---- while a gizmo drag is in progress, Escape cancels (reverts) it ----
+    // Left-click release already commits (TransformControls default); Escape
+    // is the cancel path. `reset()` reverts the pivot to its drag-start
+    // transform and dispatches objectChange -> _onPivotChanged -> syncPhysics,
+    // so physics reverts too. Then we end the drag.
+    if (this.gizmo.dragging) {
+      if (e.code === 'Escape') { e.preventDefault(); this._cancelGizmoDrag(); }
+      return; // ignore other keys mid-drag
+    }
+
     // ---- while a modal transform is running, the keyboard drives it ----
     if (this._modal) {
       if (e.code === 'Escape') { e.preventDefault(); this._cancelModal(); }
@@ -289,6 +334,8 @@ export class WorldEditor {
 
     // Escape exits whatever editing mode is open (even from a panel input).
     if (e.code === 'Escape') {
+      // If a confirm popup is open, Escape just dismisses it (don't deselect).
+      if (isPanelOpen(this.menu)) { this._hideMenu(); return; }
       this._hideMenu();
       this._deselect();
       this.terrainEditor?.close();
@@ -306,6 +353,8 @@ export class WorldEditor {
       if (e.code === 'KeyG') { e.preventDefault(); this._startModal('translate'); return; }
       if (e.code === 'KeyR') { e.preventDefault(); this._startModal('rotate'); return; }
       if (e.code === 'KeyS') { e.preventDefault(); this._startModal('scale'); return; }
+      // X with no transform active -> confirm-delete popup (Blender-style).
+      if (e.code === 'KeyX') { e.preventDefault(); this._confirmDeletePopup(); return; }
     }
     if (e.code === 'Delete' || e.code === 'Backspace') { e.preventDefault(); this._deleteSelected(); }
   }
@@ -351,7 +400,8 @@ export class WorldEditor {
 
     // Pivot at the active block's centre (fall back to it always being in set).
     this._pivot.position.copy(this._active.mesh.getWorldPosition(this._v));
-    this._pivot.quaternion.identity();
+    // Inherit the blocks root's Z-up orientation so the gizmo's local Z is up.
+    this._pivot.quaternion.copy(this._rootQuat);
     this._pivot.scale.set(1, 1, 1);
     this._pivot.updateMatrixWorld(true);
 
@@ -375,7 +425,7 @@ export class WorldEditor {
     const ordered = this.selection.slice().sort((a, b) => this._depth(a) - this._depth(b));
     for (const b of ordered) {
       this._highlightOff(b);
-      (b.parent ? b.parent.mesh : this.scene).attach(b.mesh);
+      (b.parent ? b.parent.mesh : this._blocksRoot).attach(b.mesh);
     }
     this.selection = [];
   }
@@ -409,11 +459,11 @@ export class WorldEditor {
     this.blocks.syncPhysics(child);
   }
 
-  // Detach `child` to the scene root, keeping world transform.
+  // Detach `child` to the blocks root, keeping world transform.
   _clearParent(child) {
     if (!child.parent) return;
     child.parent = null;
-    this.scene.attach(child.mesh);
+    this._blocksRoot.attach(child.mesh);
     this.blocks.syncPhysics(child);
   }
 
@@ -499,6 +549,17 @@ export class WorldEditor {
     if (this.gizmo.getMode() === 'scale') this._beginScaleAnchor();
   }
 
+  // Cancel an in-progress gizmo drag: revert the pivot to its drag-start
+  // transform (TransformControls.reset() uses its own internal snapshot and
+  // dispatches objectChange so physics resyncs), then end the drag. Mirrors
+  // Blender's Escape-during-gizmo-drag behaviour.
+  _cancelGizmoDrag() {
+    if (!this.gizmo.dragging) return;
+    this._scaleAnchor = null;            // don't let reset() re-apply the anchor
+    this.gizmo.reset();                  // revert pivot + dispatch objectChange
+    this.gizmo.dragging = false;         // end the drag (-> dragging-changed)
+  }
+
   // Capture the selection's min corner so scaling keeps that side fixed (the
   // box grows from one side instead of from the centre).
   _beginScaleAnchor() {
@@ -521,21 +582,73 @@ export class WorldEditor {
   }
 
   // ---- modal (keyboard) transforms ------------------------------------
+  // Three long axis lines (red X / green Y / blue Z) in the pivot's local
+  // frame, hidden unless a modal transform has that axis locked. Blender shows
+  // these to make the constraint axis obvious.
+  _buildAxisLines() {
+    const LEN = 1e4; // spans the viewport
+    const make = (axis, hex) => {
+      const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(-LEN, 0, 0),
+        new THREE.Vector3(LEN, 0, 0),
+      ]);
+      if (axis === 'y') geo.rotateZ(Math.PI / 2);
+      else if (axis === 'z') geo.rotateY(-Math.PI / 2);
+      const mat = new THREE.LineBasicMaterial({
+        color: hex, depthTest: false, depthWrite: false, transparent: true, opacity: 0.9,
+      });
+      const line = new THREE.Line(geo, mat);
+      line.renderOrder = 999;
+      line.visible = false;
+      return line;
+    };
+    return { x: make('x', 0xff3030), y: make('y', 0x30ff30), z: make('z', 0x3060ff) };
+  }
+
+  // Show/hide the axis indicator based on the current modal axis lock.
+  _updateAxisLine() {
+    const axis = this._modal?.axis ?? null;
+    for (const [key, line] of Object.entries(this._axisLines)) line.visible = key === axis;
+  }
+
   _startModal(mode) {
     if (!this.selection.length) return;
     if (this._modal) this._cancelModal();
     this.gizmo.enabled = false;   // the keyboard owns the transform now
     this.orbit.enabled = false;
     this._modal = { mode, axis: null };
+    // Capture the modal-start ("origin") transform. Every axis switch resets
+    // back to this so a new axis constraint replaces the old one — accumulated
+    // changes from a previous axis are discarded (Blender-style), rather than
+    // being baked in as the new baseline.
+    this._modal.originPos = this._pivot.position.clone();
+    this._modal.originQuat = this._pivot.quaternion.clone();
+    this._modal.originScale = this._pivot.scale.clone();
     this._modalBaseline();
     this._setMode(mode);
+    this._updateAxisLine();
   }
 
   _setModalAxis(axis) {
     if (!this._modal) return;
     this._modal.axis = this._modal.axis === axis ? null : axis; // press again to clear
-    this._modalBaseline(); // re-baseline so the constraint change doesn't jump
+    // Reset to the modal-start transform before re-baselining, so switching
+    // (or clearing) an axis discards any accumulated change from the previous
+    // axis and the new constraint applies from the origin. _modalBaseline
+    // re-reads the pointer at its current position, so there's no jump.
+    this._resetPivotToOrigin();
+    this._modalBaseline();
     this._modalApply();
+    this._updateAxisLine();
+  }
+
+  // Restore the pivot to the transform captured when the modal began.
+  _resetPivotToOrigin() {
+    const m = this._modal;
+    this._pivot.position.copy(m.originPos);
+    this._pivot.quaternion.copy(m.originQuat);
+    this._pivot.scale.copy(m.originScale);
+    this._pivot.updateMatrixWorld(true);
   }
 
   // Snapshot the pivot transform + pointer reference for the current mode/axis.
@@ -570,13 +683,13 @@ export class WorldEditor {
     if (m.mode === 'translate') {
       if (m.axis) {
         const t = this._axisParam(m.axis, m.startPos, ptr);
-        this._pivot.position.copy(m.startPos).addScaledVector(AXES[m.axis], t - m.startT);
+        this._pivot.position.copy(m.startPos).addScaledVector(this._axes[m.axis], t - m.startT);
       } else {
         const hit = this._rayPlane(ptr);
         if (hit) this._pivot.position.copy(m.startPos).add(hit.sub(m.startHit));
       }
     } else if (m.mode === 'rotate') {
-      const axis = m.axis ? AXES[m.axis] : this.camera.getWorldDirection(this._v).clone().negate();
+      const axis = m.axis ? this._axes[m.axis] : this.camera.getWorldDirection(this._v).clone().negate();
       const angle = Math.atan2(ptr.y - m.center.y, ptr.x - m.center.x) - m.startAngle;
       // Screen Y grows downward, so negate for an intuitive direction.
       this._q.setFromAxisAngle(axis, -angle);
@@ -613,6 +726,7 @@ export class WorldEditor {
     this.gizmo.enabled = true;
     this.orbit.enabled = true;
     this._setMode(this._baseMode);
+    this._updateAxisLine();
   }
 
   // ---- modal math helpers ---------------------------------------------
@@ -645,7 +759,7 @@ export class WorldEditor {
   _axisParam(axis, origin, ptr) {
     this._setRay(ptr);
     const ray = this.raycaster.ray;
-    const A = AXES[axis];
+    const A = this._axes[axis];
     const D = ray.direction;
     const w0 = this._v.copy(ray.origin).sub(origin);
     const b = D.dot(A);
@@ -661,7 +775,7 @@ export class WorldEditor {
   // they don't disappear with the parent's subtree when it's removed.
   _orphanChildren(block) {
     for (const b of this.blocks.blocks) {
-      if (b.parent === block) { b.parent = null; this.scene.attach(b.mesh); this.blocks.syncPhysics(b); }
+      if (b.parent === block) { b.parent = null; this._blocksRoot.attach(b.mesh); this.blocks.syncPhysics(b); }
     }
   }
 
@@ -679,5 +793,24 @@ export class WorldEditor {
     const sel = this.selection.slice();
     this._deselect();
     for (const b of sel) this._remove(b);
+  }
+
+  // Blender-style confirm popup for X-delete (shown when X is pressed with a
+  // selection but no transform active). Reuses the context-menu popup, so an
+  // outside click or Escape dismisses it without deleting. Positioned at the
+  // last pointer location, clamped to the viewport.
+  _confirmDeletePopup() {
+    const n = this.selection.length;
+    const r = this.dom.getBoundingClientRect();
+    let x = this._ptr.x ?? r.left + r.width / 2;
+    let y = this._ptr.y ?? r.top + r.height / 2;
+    // Clamp so the menu stays on-screen (the menu has a fixed min-width).
+    x = Math.min(Math.max(r.left + 4, x), r.right - 160);
+    y = Math.min(Math.max(r.top + 4, y), r.bottom - 80);
+    const label = n === 1 ? 'Delete block?' : `Delete ${n} blocks?`;
+    this._showMenu(x, y, [
+      { label, action: () => this._deleteSelected(), cls: 'danger' },
+      { label: 'Cancel', action: () => this._hideMenu() },
+    ]);
   }
 }
