@@ -21,7 +21,7 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { initGltfAnim, getGltfClip } from 'metaverse-avatar';
 
-const LOCO_GLB = 'https://cdn.jsdelivr.net/npm/metaverse-avatar/anims/UAL1_Standard.glb';
+const LOCO_GLB = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.1.2/anims/UAL1_Standard.glb';
 const LOCO_ANIMS = {
   walk: 'Walk_Loop',
   run: 'Jog_Fwd_Loop',

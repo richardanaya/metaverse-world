@@ -14,7 +14,7 @@ const FORMAT = 'metaverse-world';
 // v2: blocks stored in the Z-up authoring frame (z = height). v1 files are
 //      auto-converted on import via BlockSummoner.importState({ worldToZUp }).
 const VERSION = 2;
-const LOCO_GLB = 'https://cdn.jsdelivr.net/npm/metaverse-avatar/anims/UAL1_Standard.glb';
+const LOCO_GLB = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.1.2/anims/UAL1_Standard.glb';
 const LOCO_STAND = 'Idle_Loop';
 
 const STATIC_ENTITY_KEYS = ['terrain', 'atmosphere', 'objects'];
