@@ -907,8 +907,15 @@
     };
 
     // ---- renderer / scene -------------------------------------------------
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(devicePixelRatio);
+    // powerPreference: 'high-performance' is critical on Windows laptops with
+    // hybrid graphics (Intel iGPU + NVIDIA/AMD dGPU): Chrome's D3D11/ANGLE
+    // backend otherwise pins WebGL to the power-saving integrated GPU, which is
+    // the classic "fine on Linux/macOS, slow on Windows Chrome" cause.
+    // Cap the pixel ratio too — Windows desktops default to 125–150% scaling,
+    // and uncapped DPR × MSAA × DoF × a discard-heavy cloud shader is brutal on
+    // an iGPU. 2 is visually indistinguishable from native on most panels.
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; // the Sky shader expects tone mapping
@@ -943,7 +950,7 @@
 
     const renderTarget = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 4 });
     const composer = new EffectComposer(renderer, renderTarget);
-    composer.setPixelRatio(devicePixelRatio);
+    composer.setPixelRatio(renderer.getPixelRatio());
     composer.setSize(innerWidth, innerHeight);
     composer.addPass(new RenderPass(scene, camera));
     const dofPass = new BokehPass(scene, camera, {
@@ -1275,7 +1282,7 @@
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
-      composer.setPixelRatio(devicePixelRatio);
+      composer.setPixelRatio(renderer.getPixelRatio());
       composer.setSize(innerWidth, innerHeight);
     });
 
