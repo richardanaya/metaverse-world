@@ -79,14 +79,14 @@ const PUFF_FRAG = /* glsl */`
 
     vec2 off1 = vec2(0.18 * (vSeed - 0.5), 0.14 * (hash21(vec2(vSeed, 1.7)) - 0.5));
     vec2 off2 = vec2(-0.2 * (hash21(vec2(vSeed, 2.9)) - 0.5), 0.12 * (vSeed - 0.35));
-    vec2 off3 = vec2(0.1 * (hash21(vec2(vSeed, 4.1)) - 0.5), -0.17 * (hash21(vec2(vSeed, 5.3)) - 0.5));
-    vec2 off4 = vec2(0.04 * (hash21(vec2(vSeed, 6.5)) - 0.5), 0.06 * (hash21(vec2(vSeed, 7.7)) - 0.5));
     float lobeR = max(0.04, cornerR * 0.68);
     float l1 = roundedBoxLobe(p, vec3(off1.x, -0.02, off1.y), vec3(0.3, 0.24, 0.3), lobeR, uSoftness);
     float l2 = roundedBoxLobe(p, vec3(off2.x, 0.12, off2.y), vec3(0.26, 0.21, 0.26), lobeR * 0.92, uSoftness);
-    float l3 = roundedBoxLobe(p, vec3(off3.x, 0.26, off3.y), vec3(0.22, 0.18, 0.22), lobeR * 0.84, uSoftness);
-    float l4 = roundedBoxLobe(p, vec3(off4.x, 0.38, off4.y), vec3(0.17, 0.14, 0.17), lobeR * 0.76, uSoftness);
-    float towers = max(l1, max(l2, max(l3, l4 * 0.88)));
+    // Trimmed from 4 lobes to 2: each lobe is a full rounded-box SDF (length +
+    // max + smoothstep), and with frustumCulled=false + discard this runs on
+    // every visible fragment of every instance. Two lobes keep the bumpy
+    // silhouette/top shape while halving the per-fragment SDF cost.
+    float towers = max(l1, l2);
 
     float shape = max(max(body, slab * 0.86), towers);
 

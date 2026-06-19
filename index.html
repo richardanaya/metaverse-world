@@ -749,8 +749,8 @@
       <span class="camera-row-head"><span>AA samples</span></span>
       <select id="camera-aa-samples">
         <option value="0">Off</option>
-        <option value="2">2x</option>
-        <option value="4" selected>4x</option>
+        <option value="2" selected>2x</option>
+        <option value="4">4x</option>
         <option value="8">8x</option>
       </select>
     </label>
@@ -914,7 +914,10 @@
     // Cap the pixel ratio too — Windows desktops default to 125–150% scaling,
     // and uncapped DPR × MSAA × DoF × a discard-heavy cloud shader is brutal on
     // an iGPU. 2 is visually indistinguishable from native on most panels.
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // Note: no antialias:true here — EffectComposer renders into its own
+    // target, so the renderer's MSAA never applies (it's dead config). The
+    // composer's render target `samples` below is what actually antialiases.
+    const renderer = new THREE.WebGLRenderer({ powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -948,7 +951,7 @@
     const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 900);
     camera.position.set(40, 40, 60);
 
-    const renderTarget = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 4 });
+    const renderTarget = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 2 });
     const composer = new EffectComposer(renderer, renderTarget);
     composer.setPixelRatio(renderer.getPixelRatio());
     composer.setSize(innerWidth, innerHeight);
@@ -958,6 +961,10 @@
       aperture: 0.00032,
       maxblur: 0.003,
     });
+    // DoF off by default — it's a full-frame extra pass and is one of the
+    // heaviest things on Windows/iGPU. Users can re-enable it from the Camera
+    // panel; the checkbox below reads this state at setup.
+    dofPass.enabled = false;
     composer.addPass(dofPass);
     const outputPass = new OutputPass();
     outputPass.toneMapping = renderer.toneMapping;
