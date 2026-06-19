@@ -691,9 +691,9 @@
       "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
       "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar@0.1.2/index.js",
-      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.3/index.js",
+      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.4/index.js",
       "metaverse-sky": "https://cdn.jsdelivr.net/npm/metaverse-sky@0.1.0/index.js",
-      "metaverse-celestial": "https://cdn.jsdelivr.net/npm/metaverse-celestial/index.js",
+      "metaverse-celestial": "https://cdn.jsdelivr.net/npm/metaverse-celestial@0.1.2/index.js",
       "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
     }
   }
@@ -853,8 +853,7 @@
     import { Avatar } from 'metaverse-avatar';
     import {
       TerrainRegion, loadPBRTextureSet,
-      DEFAULT_WATER_LEVEL, DEFAULT_TEXTURE_HEIGHTS,
-      DEFAULT_HEX_TILE_RATE, DEFAULT_HEX_TILE_CONTRAST, DEFAULT_TEXTURE_BLEND_WIDTH,
+      DEFAULT_TEXTURE_HEIGHTS, DEFAULT_TEXTURE_BLEND_WIDTH,
     } from 'metaverse-terrain';
     import { createAtmosphereSky, CloudLayer, Precipitation } from 'metaverse-sky';
     import { PlayerController } from './playerController.js';
@@ -871,7 +870,7 @@
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
     const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.1.2/models/';
-    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.3/texture';
+    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.4/texture';
     const SKY_TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-sky@0.1.0/textures';
     const PBR_TEXTURE_URLS = {
       sand: {
@@ -921,6 +920,8 @@
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; // the Sky shader expects tone mapping
     renderer.toneMappingExposure = 0.6;
     document.body.appendChild(renderer.domElement);
@@ -1089,7 +1090,7 @@
       sunPosition: [0.45, 0.86, 0.24],
     });
     scene.add(sky);
-    const celestialBodies = new CelestialBodies({ scene, camera }).init();
+    const celestialBodies = new CelestialBodies({ scene, camera, renderer }).init();
     celestialBodies.setStars({ starSize: 0.25 });
     const worldSunDirection = sky.material.uniforms.sunPosition.value.clone().normalize();
     const worldWind = { directionDeg: 18, direction: new THREE.Vector2(Math.cos(THREE.MathUtils.degToRad(18)), Math.sin(THREE.MathUtils.degToRad(18))), speed: 0.08 };
@@ -1121,13 +1122,13 @@
         snowStart: 36.0,
       },
       textureDensity: 30,
-      hexTileRate: DEFAULT_HEX_TILE_RATE,
-      hexTileContrast: DEFAULT_HEX_TILE_CONTRAST,
       textureBlendWidth: DEFAULT_TEXTURE_BLEND_WIDTH,
+      wetSandHeight: 0.25,
+      shadowsEnabled: true,
+      castShadowsEnabled: true,
       normalStrength: 1.0,
       terrainMetalIntensity: 1.0,
       terrainRoughnessIntensity: 1.75,
-      shorelineStrength: 0.9,
       terrainAOIntensity: 1.0,
       addBrushCursor: true, // brush ring preview while sculpting in the terrain editor
       // Layer bands: water 28m, grass 29m, rock 33.5m, snow 36m.
@@ -1137,8 +1138,37 @@
     // ---- avatar -----------------------------------------------------------
     const avatar = await new Avatar().load(AVATAR_MODELS); // ~1.8 m, unscaled
     avatar.group.rotation.y = -Math.PI / 2; // face +Z, the controller's forward
+    avatar.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     scene.add(avatar.group);
     avatar.setBlinking(true);
+
+    // Directional sunlight: matches the procedural sky sun and provides real
+    // scene lighting/shadows for terrain, avatars, and blocks.
+    const sunLight = new THREE.DirectionalLight(0xfff3d6, 2.4);
+    sunLight.name = 'SunDirectionalLight';
+    sunLight.castShadow = true;
+    // High-quality sun shadows: large map + tighter frustum around the player.
+    // This is intentionally higher cost; terrain editor can still disable
+    // receive/cast shadows when profiling low-end devices.
+    sunLight.shadow.mapSize.set(4096, 4096);
+    sunLight.shadow.camera.near = 1;
+    sunLight.shadow.camera.far = 850;
+    sunLight.shadow.camera.left = -120;
+    sunLight.shadow.camera.right = 120;
+    sunLight.shadow.camera.top = 120;
+    sunLight.shadow.camera.bottom = -120;
+    sunLight.shadow.bias = -0.00008;
+    sunLight.shadow.normalBias = 0.035;
+    sunLight.shadow.radius = 2;
+    sunLight.shadow.blurSamples = 12;
+    sunLight.shadow.camera.updateProjectionMatrix();
+    const sunTarget = new THREE.Object3D();
+    sunTarget.name = 'SunDirectionalTarget';
+    scene.add(sunTarget);
+    sunLight.target = sunTarget;
+    scene.add(sunLight);
+    const sunWarmColor = new THREE.Color(0xffb36f);
+    const sunDayColor = new THREE.Color(0xfff3d6);
 
     const envMaterials = [];
     const bindPBREnvironment = (root) => {
@@ -1301,8 +1331,20 @@
       const intensity = THREE.MathUtils.lerp(skyEditor.envIntensityMin, skyEditor.envIntensityMax, elevationMix);
       scene.environmentIntensity = intensity;
       for (const m of envMaterials) m.envMapIntensity = intensity;
+
+      const daylight = THREE.MathUtils.smoothstep(worldSunDirection.y, -0.04, 0.22);
+      sunTarget.position.copy(avatar.group.position);
+      sunTarget.updateMatrixWorld();
+      sunLight.position.copy(sunTarget.position).addScaledVector(worldSunDirection, 320);
+      sunLight.target.updateMatrixWorld();
+      sunLight.intensity = 2.6 * daylight;
+      sunLight.color.copy(sunWarmColor).lerp(sunDayColor, THREE.MathUtils.smoothstep(worldSunDirection.y, 0.08, 0.55));
+
       terrain.setSunDirection(worldSunDirection);
       clouds.setSunDirection(worldSunDirection);
+      // Feed the sky sun to the celestial dome so it can skip the star/Milky Way
+      // pipeline while the sun is up (stars are invisible against the lit sky).
+      celestialBodies.setSkySun(worldSunDirection);
     };
     syncWorldWind = ({ directionDeg = worldWind.directionDeg, speed = worldWind.speed } = {}) => {
       worldWind.directionDeg = directionDeg;
@@ -1337,7 +1379,7 @@
       composer.render(dt);
     });
 
-    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, composer, dofPass, outputPass, worldWind, worldSunDirection }; // TEMP debug handle
+    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, composer, dofPass, outputPass, worldWind, worldSunDirection }; // TEMP debug handle
     // Everything is up — let the boot screen enable its ENTER button.
     window.__bootReady?.();
   </script>

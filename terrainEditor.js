@@ -27,6 +27,7 @@ const LAYER_SLIDER_MAX = 40;
 
 export class TerrainEditor {
   constructor({ renderer, camera, controls, terrain, player }) {
+    this.renderer = renderer;
     this.dom = renderer.domElement;
     this.camera = camera;
     this.orbit = controls;
@@ -37,8 +38,6 @@ export class TerrainEditor {
     this._binding = null;
     this._mode = null;            // active brush mode, or null = no brush
     this._dirty = false;
-    this._erosionStrength = 0.55;
-    this._erosionIterations = 1;
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
     this._textureBase = this._resolveTextureBase(terrain);
@@ -98,19 +97,19 @@ export class TerrainEditor {
     this._addSlider('Strength', 0.05, 2, 0.05, this.terrain.brush.strength,
       (v) => this.terrain.setBrushStrength(v));
 
-    // Terrain mesh and procedural detail controls.
+    // Terrain size controls.
     this._addTerrainDetail();
 
     // Layer height bands (water / grass / rock / snow transitions).
     this._addLayers();
 
-    // Hex tiling + texture scale.
+    // Texture scale and blend controls.
     this._addTiling();
 
     // PBR surface + water shading.
     this._addPBR();
 
-    // Procedural terrain shading controls.
+    // Terrain shading controls.
     this._addShading();
 
     // Per-layer albedo + bundled PBR map previews.
@@ -205,24 +204,10 @@ export class TerrainEditor {
   }
 
   _addTerrainDetail() {
-    this._addLabel('Terrain detail');
+    this._addLabel('Terrain');
     this._terrainDetailControls = {
       regionSize: this._addSlider('Region size', 64, 512, 8, this.terrain.regionSize,
         (v) => { this.terrain.setRegionSize(v); this._markDirty(); this._flushCollider(); this._refreshHeightmap(); }, (v) => `${Math.round(v)}m`),
-      quality: this._addSelect('Terrain mesh', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], this.terrain.terrainQuality ?? 'medium', (v) => {
-        this.terrain.setTerrainQuality(v);
-        this._terrainDetailControls?.subdivisions?.set(this.terrain.renderSubdivisions);
-      }),
-      subdivisions: this._addSlider('Subdivisions', 1, 4, 1, this.terrain.renderSubdivisions,
-        (v) => { this.terrain.setRenderSubdivisions(v); this._terrainDetailControls?.quality?.set(this.terrain.terrainQuality); }, (v) => `${Math.round(v)}×`),
-      detail: this._addSlider('Detail strength', 0, 2, 0.05, this.terrain.terrainDetailStrength,
-        (v) => this.terrain.setTerrainDetailStrength(v), (v) => `${Number(v).toFixed(2)}m`),
-      cliff: this._addSlider('Cliff breakup', 0, 2, 0.05, this.terrain.terrainCliffStrength,
-        (v) => this.terrain.setTerrainCliffStrength(v)),
-      micro: this._addSlider('Micro detail', 0, 2, 0.05, this.terrain.terrainMicroDetailStrength,
-        (v) => this.terrain.setTerrainMicroDetailStrength(v)),
-      shoreline: this._addSlider('Shoreline', 0, 1, 0.01, this.terrain.shorelineStrength,
-        (v) => this.terrain.setShorelineStrength(v)),
     };
   }
 
@@ -349,14 +334,10 @@ export class TerrainEditor {
   }
 
   _addTiling() {
-    this._addLabel('Tiling');
+    this._addLabel('Texture');
     this._tilingSliders = {
       density: this._addSlider('Texture scale', 4, 48, 1, this.terrain.textureDensity,
         (v) => this.terrain.setTextureDensity(v), (v) => `${Math.round(v)}×`),
-      hexRate: this._addSlider('Hex tile rate', 0.25, 8, 0.05, this.terrain.hexTileRate,
-        (v) => this.terrain.setHexTileRate(v), (v) => `${Number(v).toFixed(2)}×`),
-      hexContrast: this._addSlider('Hex contrast', 0.5, 0.95, 0.01, this.terrain.hexTileContrast,
-        (v) => this.terrain.setHexTileContrast(v)),
       blend: this._addSlider('Blend width', 1, 12, 0.5, this.terrain.textureBlendWidth, (v) => {
         this.terrain.textureBlendWidth = v;
         this.terrain.syncTextureHeightUniforms();
@@ -387,20 +368,23 @@ export class TerrainEditor {
 
   _addShading() {
     this._addLabel('Terrain shading');
+    const syncShadowMap = () => {
+      this.renderer.shadowMap.enabled = !!(this.terrain.shadowsEnabled || this.terrain.castShadowsEnabled);
+    };
     this._shadingChecks = {
-      triplanar: this._addCheckbox('Triplanar', this.terrain.triplanarEnabled, (on) => this.terrain.setTriplanarEnabled(on)),
       wetSand: this._addCheckbox('Wet sand', this.terrain.wetSandEnabled, (on) => this.terrain.setWetSandEnabled(on)),
-      snowSparkles: this._addCheckbox('Snow sparkles', this.terrain.snowSparklesEnabled, (on) => this.terrain.setSnowSparklesEnabled(on)),
-      noisePerturb: this._addCheckbox('Noise edges', this.terrain.noisePerturbEnabled, (on) => this.terrain.setNoisePerturbEnabled(on)),
-      cavityAO: this._addCheckbox('Cavity AO', this.terrain.cavityAOEnabled, (on) => this.terrain.setCavityAOEnabled(on)),
+      receiveShadows: this._addCheckbox('Receive shadows', this.terrain.shadowsEnabled, (on) => {
+        this.terrain.setShadowsEnabled(on);
+        syncShadowMap();
+      }),
+      castShadows: this._addCheckbox('Cast shadows', this.terrain.castShadowsEnabled, (on) => {
+        this.terrain.setCastShadowsEnabled(on);
+        syncShadowMap();
+      }),
     };
     this._shadingSliders = {
-      moisture: this._addSlider('Moisture', 0, 1, 0.01, this.terrain.moisture,
-        (v) => this.terrain.setMoisture(v), (v) => (v < 0.2 ? 'Arid' : v < 0.4 ? 'Dry' : v < 0.6 ? 'Normal' : v < 0.8 ? 'Wet' : 'Swampy')),
-      biomeVariation: this._addSlider('Biome variation', 0, 1, 0.01, this.terrain.biomeVariation,
-        (v) => this.terrain.setBiomeVariation(v)),
-      proceduralNormal: this._addSlider('Procedural normals', 0, 1.5, 0.05, this.terrain.proceduralNormalStrength,
-        (v) => this.terrain.setProceduralNormalStrength(v)),
+      wetSandHeight: this._addSlider('Wet sand height', 0, 4, 0.05, this.terrain.wetSandHeight ?? 0.25,
+        (v) => this.terrain.setWetSandHeight(v), (v) => `${Number(v).toFixed(2)}m`),
     };
   }
 
@@ -408,8 +392,6 @@ export class TerrainEditor {
     const t = this.terrain;
     const u = t.waterMesh?.material?.uniforms;
     this._tilingSliders?.density?.set(t.textureDensity);
-    this._tilingSliders?.hexRate?.set(t.hexTileRate);
-    this._tilingSliders?.hexContrast?.set(t.hexTileContrast);
     this._tilingSliders?.blend?.set(t.textureBlendWidth);
     this._pbrSliders?.normal?.set(t.normalStrength);
     this._pbrSliders?.metal?.set(t.terrainMetalIntensity ?? 1);
@@ -419,14 +401,10 @@ export class TerrainEditor {
     this._waterPBR?.set((u?.uPBREnabled?.value ?? 1) > 0.5);
     this._refractionEnabled?.set(t.refractionEnabled);
     this._waterDarkness?.set(t.waterDarkness ?? u?.uWaterDarkness?.value ?? 0.5);
-    this._shadingChecks?.triplanar?.set(t.triplanarEnabled);
     this._shadingChecks?.wetSand?.set(t.wetSandEnabled);
-    this._shadingChecks?.snowSparkles?.set(t.snowSparklesEnabled);
-    this._shadingChecks?.noisePerturb?.set(t.noisePerturbEnabled);
-    this._shadingChecks?.cavityAO?.set(t.cavityAOEnabled);
-    this._shadingSliders?.moisture?.set(t.moisture);
-    this._shadingSliders?.biomeVariation?.set(t.biomeVariation);
-    this._shadingSliders?.proceduralNormal?.set(t.proceduralNormalStrength);
+    this._shadingChecks?.receiveShadows?.set(t.shadowsEnabled);
+    this._shadingChecks?.castShadows?.set(t.castShadowsEnabled);
+    this._shadingSliders?.wetSandHeight?.set(t.wetSandHeight ?? 0.25);
   }
 
   _setTerrainPBRIntensity(prop, uniform, setter, value) {
@@ -440,10 +418,7 @@ export class TerrainEditor {
   }
 
   _addActions() {
-    this._addLabel('Erosion');
-    this._erosionStrengthControl = this._addSlider('Erosion strength', 0, 1.5, 0.05, this._erosionStrength, (v) => { this._erosionStrength = v; });
-    this._erosionIterationsControl = this._addSlider('Erosion passes', 1, 4, 1, this._erosionIterations, (v) => { this._erosionIterations = Math.round(v); });
-
+    this._addLabel('Actions');
     const actions = document.createElement('div');
     actions.className = 'terrain-actions';
     const mkAction = (label, fn) => {
@@ -453,7 +428,6 @@ export class TerrainEditor {
       actions.appendChild(b);
     };
     mkAction('Randomize', () => { this.terrain.randomize(); this._markDirty(); this._flushCollider(); this._refreshHeightmap(); });
-    mkAction('Erode', () => { this.terrain.erode({ iterations: this._erosionIterations, strength: this._erosionStrength }); this._markDirty(); this._flushCollider(); this._refreshHeightmap(); });
     mkAction('Flatten', () => { this.terrain.level(); this._markDirty(); this._flushCollider(); this._refreshHeightmap(); });
     mkAction('Heightmap', () => this.terrain.downloadHeightmap());
     this.panel.appendChild(actions);

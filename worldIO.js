@@ -137,12 +137,14 @@ export class WorldIO {
       waterLevel: t.waterLevel,
       waterEnabled: t.waterEnabled,
       textureDensity: t.textureDensity,
-      hexTileRate: t.hexTileRate,
-      hexTileContrast: t.hexTileContrast,
       textureHeights: { ...t.textureHeights },
       textureBlendWidth: t.textureBlendWidth,
       normalStrength: t.normalStrength,
       terrainAOIntensity: t.terrainAOIntensity,
+      wetSandEnabled: t.wetSandEnabled,
+      wetSandHeight: t.wetSandHeight,
+      shadowsEnabled: t.shadowsEnabled,
+      castShadowsEnabled: t.castShadowsEnabled,
       heightMap: float32ToBase64(t.heightMap),
       textures,
     };
@@ -290,12 +292,15 @@ export class WorldIO {
     t.heightMap.set(heightMap);
     if (data.waterLevel != null) t.setWaterLevel(data.waterLevel);
     if (data.textureDensity != null) t.setTextureDensity(data.textureDensity);
-    if (data.hexTileRate != null) t.setHexTileRate(data.hexTileRate);
-    if (data.hexTileContrast != null) t.setHexTileContrast(data.hexTileContrast);
     if (data.textureHeights) t.setTextureHeights(data.textureHeights);
     if (data.waterEnabled != null) t.setWaterEnabled(data.waterEnabled);
     if (data.normalStrength != null) t.setNormalStrength(data.normalStrength);
     if (data.terrainAOIntensity != null) t.setTerrainAOIntensity(data.terrainAOIntensity);
+    if (data.wetSandEnabled != null) t.setWetSandEnabled(data.wetSandEnabled);
+    if (data.wetSandHeight != null) t.setWetSandHeight(data.wetSandHeight);
+    if (data.shadowsEnabled != null) t.setShadowsEnabled(data.shadowsEnabled);
+    if (data.castShadowsEnabled != null) t.setCastShadowsEnabled(data.castShadowsEnabled);
+    this.renderer.shadowMap.enabled = !!(t.shadowsEnabled || t.castShadowsEnabled);
     if (data.textureBlendWidth != null) {
       t.textureBlendWidth = data.textureBlendWidth;
       t.syncTextureHeightUniforms();
