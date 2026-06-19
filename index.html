@@ -693,6 +693,7 @@
       "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar/index.js",
       "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.3/index.js",
       "metaverse-sky": "https://cdn.jsdelivr.net/npm/metaverse-sky@0.1.0/index.js",
+      "metaverse-celestial": "https://cdn.jsdelivr.net/npm/metaverse-celestial/index.js",
       "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
     }
   }
@@ -862,6 +863,7 @@
     import { TerrainEditor } from './terrainEditor.js';
     import { AvatarEditor } from './avatarEditor.js';
     import { SkyEditor } from './skyEditor.js';
+    import { CelestialBodies } from 'metaverse-celestial';
     import { MultiplayerManager } from './multiplayer.js';
     import { WorldIO } from './worldIO.js';
     import { resolveAgentName } from './agentName.js';
@@ -1073,6 +1075,8 @@
       sunPosition: [0.45, 0.86, 0.24],
     });
     scene.add(sky);
+    const celestialBodies = new CelestialBodies({ scene, camera }).init();
+    celestialBodies.setStars({ starSize: 0.25 });
     const worldSunDirection = sky.material.uniforms.sunPosition.value.clone().normalize();
     const worldWind = { directionDeg: 18, direction: new THREE.Vector2(Math.cos(THREE.MathUtils.degToRad(18)), Math.sin(THREE.MathUtils.degToRad(18))), speed: 0.08 };
 
@@ -1156,7 +1160,7 @@
     let syncEnvironmentLighting = () => {};
     let syncWorldWind = () => {};
     const skyEditor = new SkyEditor({
-      sky, renderer, clouds, precipitation,
+      sky, renderer, clouds, precipitation, celestialBodies,
       onSunChange: () => syncEnvironmentLighting(),
       onWindChange: ({ directionDeg, speed }) => syncWorldWind({ directionDeg, speed }),
     });
@@ -1312,13 +1316,14 @@
       multiplayer.tickRemotes(dt);       // interpolate remote avatars
       worldIO.tickAgents(dt);            // imported agent avatars
       sky.position.copy(camera.position); // keep the skydome centered on the camera
+      celestialBodies.update(clock.elapsedTime);
       clouds.update(dt);
       precipitation.update(dt);
       updateDepthOfField();
       composer.render(dt);
     });
 
-    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, composer, dofPass, outputPass, worldWind, worldSunDirection }; // TEMP debug handle
+    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, composer, dofPass, outputPass, worldWind, worldSunDirection }; // TEMP debug handle
     // Everything is up — let the boot screen enable its ENTER button.
     window.__bootReady?.();
   </script>

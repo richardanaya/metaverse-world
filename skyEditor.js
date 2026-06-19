@@ -9,6 +9,15 @@ import * as THREE from 'three';
 import { DEFAULT_CLOUD_SETTINGS } from 'metaverse-sky';
 import { showPanel, hidePanel } from './panelFade.js';
 
+const PHASE_NAMES = [
+  'New', 'Waxing Crescent', 'First Quarter', 'Waxing Gibbous',
+  'Full', 'Waning Gibbous', 'Last Quarter', 'Waning Crescent', 'New',
+];
+function phaseLabel(phase) {
+  const i = Math.round(phase * 8);
+  return PHASE_NAMES[Math.max(0, Math.min(8, i))];
+}
+
 export class SkyEditor {
   constructor({
     sky,
@@ -16,6 +25,7 @@ export class SkyEditor {
     renderer,
     clouds = null,
     precipitation = null,
+    celestialBodies = null,
     onSunChange = null,
     onWindChange = null,
     envIntensityMin = 1.0,
@@ -27,6 +37,7 @@ export class SkyEditor {
     this.renderer = renderer;
     this.clouds = clouds;
     this.precipitation = precipitation;
+    this.celestialBodies = celestialBodies;
     this.onSunChange = onSunChange;
     this.onWindChange = onWindChange;
     this.envIntensityMin = envIntensityMin;
@@ -84,6 +95,7 @@ export class SkyEditor {
 
     if (this.clouds) this._buildCloudSection();
     if (this.precipitation) this._buildPrecipitationSection();
+    if (this.celestialBodies) this._buildCelestialSection();
 
     const done = document.createElement('button');
     done.className = 'sky-done';
@@ -213,6 +225,51 @@ export class SkyEditor {
     this._slider('Wind drift', 0, 2, 0.05, p.windDrift, (v) => {
       this.precipitation.setPrecipitation({ windDrift: v });
     }, (v) => `${Number(v).toFixed(1)}×`);
+  }
+
+  _buildCelestialSection() {
+    const bodies = this.celestialBodies;
+    const s = bodies.settings;
+    this._section('Celestial');
+    this._checkbox('Show bodies', s.visible, (on) => bodies.setVisible(on));
+    this._slider('Moon phase', 0, 1, 0.01, s.moonPhase, (v) => {
+      bodies.setMoonPhase(v);
+    }, (v) => phaseLabel(v));
+    this._slider('Moon elevation', -10, 80, 1, s.moonElevation, (v) => {
+      bodies.setMoon({ moonElevation: v });
+    }, (v) => `${Math.round(v)}°`);
+    this._slider('Moon azimuth', -180, 180, 1, s.moonAzimuth, (v) => {
+      bodies.setMoon({ moonAzimuth: v });
+    }, (v) => `${Math.round(v)}°`);
+    this._slider('Moon size', 6, 160, 0.5, s.moonSize, (v) => {
+      bodies.setMoon({ moonSize: v });
+    });
+    this._slider('Moon glow', 0, 1, 0.01, s.moonGlow, (v) => {
+      bodies.setMoon({ moonGlow: v });
+    }, (v) => `${Math.round(v * 100)}%`);
+    this._slider('Moon horizon boost', 0, 1, 0.01, s.moonHorizonBoost, (v) => {
+      bodies.setMoon({ moonHorizonBoost: v });
+    }, (v) => `${Math.round(v * 100)}%`);
+    this._slider('Sun elevation', -10, 90, 1, s.sunElevation, (v) => {
+      bodies.setSun({ sunElevation: v });
+    }, (v) => `${Math.round(v)}°`);
+    this._slider('Sun azimuth', -180, 180, 1, s.sunAzimuth, (v) => {
+      bodies.setSun({ sunAzimuth: v });
+    }, (v) => `${Math.round(v)}°`);
+    this._checkbox('Show planets', s.planetsVisible, (on) => bodies.setPlanets({ planetsVisible: on }));
+    this._slider('Planet scale', 0.25, 3, 0.05, s.planetScale, (v) => {
+      bodies.setPlanets({ planetScale: v });
+    });
+    this._slider('Planet glow', 0, 2, 0.01, s.planetGlow, (v) => {
+      bodies.setPlanets({ planetGlow: v });
+    }, (v) => `${Math.round(v * 100)}%`);
+    this._checkbox('Show stars', s.starsVisible, (on) => bodies.setStars({ starsVisible: on }));
+    this._slider('Star opacity', 0, 1, 0.01, s.starOpacity, (v) => {
+      bodies.setStars({ starOpacity: v });
+    }, (v) => `${Math.round(v * 100)}%`);
+    this._slider('Star size', 0.25, 3, 0.05, s.starSize, (v) => {
+      bodies.setStars({ starSize: v });
+    });
   }
 
   _resetClouds() {
