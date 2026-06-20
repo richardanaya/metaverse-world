@@ -905,6 +905,35 @@
       },
     };
 
+    // ---- WebGPU detection -------------------------------------------------
+    // Detect WebGPU support. We check for navigator.gpu and an adapter.
+    // NOTE: A full switch to THREE.WebGPURenderer is currently blocked because
+    // the sky (metaverse-sky), clouds, celestial bodies (metaverse-celestial),
+    // and the depth-of-field post-processing (EffectComposer/BokehPass) all use
+    // raw GLSL ShaderMaterials / WebGL2-only APIs that are incompatible with
+    // the WebGPU backend's node-based material system. Once those shaders are
+    // ported to TSL nodes, this is where the renderer selection would happen:
+    //   const renderer = hasWebGPU
+    //     ? new THREE.WebGPURenderer({ powerPreference: 'high-performance' })
+    //     : new THREE.WebGLRenderer({ powerPreference: 'high-performance' });
+    const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator;
+    (async () => {
+      let gpuAvailable = false;
+      if (hasWebGPU) {
+        try {
+          const adapter = await navigator.gpu.requestAdapter();
+          gpuAvailable = adapter !== null;
+        } catch { gpuAvailable = false; }
+      }
+      // Surface the result in the topbar and console.
+      const statusEl = document.getElementById('topbar-conn-text');
+      const backendLabel = gpuAvailable ? 'WEBGPU READY' : 'WEBGL2';
+      if (statusEl) {
+        statusEl.textContent = (statusEl.textContent.split('·')[0] + ' · ' + backendLabel).trim();
+      }
+      console.log(`[Metaverse] WebGPU: ${gpuAvailable ? 'available (not used — sky/clouds/DoF need TSL port)' : 'not available'}, using WebGL2.`);
+    })();
+
     // ---- renderer / scene -------------------------------------------------
     // powerPreference: 'high-performance' is critical on Windows laptops with
     // hybrid graphics (Intel iGPU + NVIDIA/AMD dGPU): Chrome's D3D11/ANGLE
@@ -917,7 +946,7 @@
     // target, so the renderer's MSAA never applies (it's dead config). The
     // composer's render target `samples` below is what actually antialiases.
     const renderer = new THREE.WebGLRenderer({ powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setPixelRatio(1.0);
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = false;
