@@ -368,19 +368,11 @@ export class TerrainEditor {
 
   _addShading() {
     this._addLabel('Terrain shading');
-    const syncShadowMap = () => {
-      this.renderer.shadowMap.enabled = !!(this.terrain.shadowsEnabled || this.terrain.castShadowsEnabled);
-    };
+    this.terrain.setShadowsEnabled(false);
+    this.terrain.setCastShadowsEnabled(false);
+    this.renderer.shadowMap.enabled = false;
     this._shadingChecks = {
       wetSand: this._addCheckbox('Wet sand', this.terrain.wetSandEnabled, (on) => this.terrain.setWetSandEnabled(on)),
-      receiveShadows: this._addCheckbox('Receive shadows', this.terrain.shadowsEnabled, (on) => {
-        this.terrain.setShadowsEnabled(on);
-        syncShadowMap();
-      }),
-      castShadows: this._addCheckbox('Cast shadows', this.terrain.castShadowsEnabled, (on) => {
-        this.terrain.setCastShadowsEnabled(on);
-        syncShadowMap();
-      }),
     };
     this._shadingSliders = {
       wetSandHeight: this._addSlider('Wet sand height', 0, 4, 0.05, this.terrain.wetSandHeight ?? 0.25,
@@ -402,8 +394,6 @@ export class TerrainEditor {
     this._refractionEnabled?.set(t.refractionEnabled);
     this._waterDarkness?.set(t.waterDarkness ?? u?.uWaterDarkness?.value ?? 0.5);
     this._shadingChecks?.wetSand?.set(t.wetSandEnabled);
-    this._shadingChecks?.receiveShadows?.set(t.shadowsEnabled);
-    this._shadingChecks?.castShadows?.set(t.castShadowsEnabled);
     this._shadingSliders?.wetSandHeight?.set(t.wetSandHeight ?? 0.25);
   }
 

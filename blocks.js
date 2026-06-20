@@ -90,8 +90,8 @@ export class BlockSummoner {
       new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.0 }),
     );
     mesh.position.set(x, y, z); // local Z-up
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
     this.root.add(mesh);
     this.onMesh?.(mesh);
 

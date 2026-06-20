@@ -227,7 +227,12 @@ export class MultiplayerManager {
 
     const avatar = await new Avatar().load(this.modelsUrl);
     avatar.group.rotation.y = -Math.PI / 2;
-    avatar.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    avatar.group.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = false;
+        o.receiveShadow = false;
+      }
+    });
     avatar.setBlinking(true);
     this.scene.add(avatar.group);
 

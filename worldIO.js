@@ -143,8 +143,8 @@ export class WorldIO {
       terrainAOIntensity: t.terrainAOIntensity,
       wetSandEnabled: t.wetSandEnabled,
       wetSandHeight: t.wetSandHeight,
-      shadowsEnabled: t.shadowsEnabled,
-      castShadowsEnabled: t.castShadowsEnabled,
+      shadowsEnabled: false,
+      castShadowsEnabled: false,
       heightMap: float32ToBase64(t.heightMap),
       textures,
     };
@@ -298,9 +298,9 @@ export class WorldIO {
     if (data.terrainAOIntensity != null) t.setTerrainAOIntensity(data.terrainAOIntensity);
     if (data.wetSandEnabled != null) t.setWetSandEnabled(data.wetSandEnabled);
     if (data.wetSandHeight != null) t.setWetSandHeight(data.wetSandHeight);
-    if (data.shadowsEnabled != null) t.setShadowsEnabled(data.shadowsEnabled);
-    if (data.castShadowsEnabled != null) t.setCastShadowsEnabled(data.castShadowsEnabled);
-    this.renderer.shadowMap.enabled = !!(t.shadowsEnabled || t.castShadowsEnabled);
+    t.setShadowsEnabled(false);
+    t.setCastShadowsEnabled(false);
+    this.renderer.shadowMap.enabled = false;
     if (data.textureBlendWidth != null) {
       t.textureBlendWidth = data.textureBlendWidth;
       t.syncTextureHeightUniforms();
@@ -340,7 +340,12 @@ export class WorldIO {
 
     const avatar = await new Avatar().load(this.modelsUrl);
     avatar.group.rotation.y = -Math.PI / 2;
-    avatar.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    avatar.group.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = false;
+        o.receiveShadow = false;
+      }
+    });
     avatar.setBlinking(true);
     this.scene.add(avatar.group);
 
