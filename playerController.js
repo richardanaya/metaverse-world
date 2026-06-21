@@ -3,8 +3,9 @@
 //
 //   W A S D / arrows   move + turn        Shift    run (hold)
 //   E tap (or Space)   jump               E hold   take off (fly)
-//   X                  crouch (toggle)    F        toggle flight
-//   E / C              fly up / down      drag     orbit the camera
+//   X / C              crouch (toggle)    F        toggle flight
+//   drag               orbit the camera
+//   E / C / PgUp/PgDn  fly up / down      2×Space  stop flying (double-tap)
 //
 // This is a real kinematic character controller, not a raycast hack: it uses
 // Rapier's `KinematicCharacterController` driving a capsule collider against a
@@ -36,6 +37,13 @@ const LOCO_ANIMS = {
 // they stay meaningful however large the figure is rendered.
 const WALK_SPEED = 1.5, RUN_SPEED = 4.0, CROUCH_SPEED = 1.1, BACK_FACTOR = 0.6, TURN_RATE = 2.6;
 const FLY_SPEED = 4.0, JUMP_HEIGHT = 4.0;
+// Flying forward should clearly outpace running — multiply the (avatar-local)
+// flight speed for horizontal travel, with an extra kick while Shift is held.
+const FLY_FWD_FACTOR = 2.6, FLY_FWD_RUN_FACTOR = 4.2;
+const DOUBLE_TAP = 0.3; // s — second Space within this window stops flight
+// Cutting flight mid-air keeps the horizontal speed you had and arcs forward,
+// bleeding it off at this rate (1/s) until you land (or fully fade in the air).
+const FLIGHT_EXIT_DRAG = 0.6;
 const RUN_JUMP_BOOST = 1.0;       // m/s extra forward at run-jump takeoff (avatar-local)
 const RUN_JUMP_BOOST_DECAY = 12;  // 1/s — fades the boost quickly so it's a punch, not a glide
 const E_HOLD = 0.26; // s — hold E longer than this (grounded) to take off into flight
@@ -49,11 +57,12 @@ const MAX_DT = 1 / 30;      // clamp so a stalled tab can't fling the capsule
 const CAM_FOLLOW_WALK = 1.8, CAM_FOLLOW_RUN = 3.4;
 const CAM_MANUAL_COOLDOWN = 0.5;   // s after manual camera input before auto-follow resumes
 const CAM_DEFAULT_PHI = 1.27;      // resting vertical angle used by recenter (R3)
+const CAM_DEFAULT_DIST = 4.18;     // resting chase distance (avatar-local); Escape zooms back to it
 const CAM_FOCUS_RATE = 11;         // 1/s — alt-click orbit pivot ease-in
 
 const MOVE_KEYS = [
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'KeyE', 'KeyC', 'ShiftLeft', 'ShiftRight',
+  'KeyE', 'KeyC', 'PageUp', 'PageDown', 'ShiftLeft', 'ShiftRight',
 ];
 
 export class PlayerController {
@@ -70,6 +79,9 @@ export class PlayerController {
     this.yaw = avatar.group.rotation.y;
     this.grounded = true;
     this.crouching = false;
+    this._lastSpaceAt = null; // last Space keydown time — a quick second tap stops flight
+    this._airVelX = 0;       // horizontal velocity carried out of flight (world units/s)
+    this._airVelZ = 0;
     this._vy = 0;            // vertical velocity (world units/s)
     this._jumpQueued = false;
     this._jumpForwardBoost = 0; // extra forward m/s along facing, decays in the air
@@ -433,9 +445,31 @@ export class PlayerController {
     if (!this.active || !this.inputEnabled || this.posing || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
     const c = e.code;
     if (down) {
-      if (c === 'KeyF' || c === 'Home') { e.preventDefault(); this.flying = !this.flying; this._vy = 0; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } return; }
+      if (c === 'KeyF' || c === 'Home') { e.preventDefault(); this.flying = !this.flying; this._vy = 0; this._lastSpaceAt = null; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } return; }
+      // X always toggles crouch. C toggles too (grounded), but also falls through
+      // to the movement-key set so it still descends while flying.
       if (c === 'KeyX') { e.preventDefault(); if (!this.flying && this.grounded) this.crouching = !this.crouching; return; }
-      if (c === 'Space') { e.preventDefault(); if (!this.flying && !this.crouching && this.grounded) this._jumpQueued = true; return; }
+      if (c === 'KeyC' && !e.repeat && !this.flying && this.grounded) this.crouching = !this.crouching;
+      // PgUp/PgDn fly up/down; pressing either while grounded takes off into flight.
+      if ((c === 'PageUp' || c === 'PageDown') && !this.flying) {
+        this.flying = true; this._vy = 0; this.crouching = false; this._jumpForwardBoost = 0; this._lastSpaceAt = null;
+      }
+      if (c === 'Space') {
+        e.preventDefault();
+        if (!e.repeat) {
+          const t = performance.now() / 1000;
+          if (this.flying) {
+            // Double-tap Space stops flying; a lone tap just arms the timer.
+            if (this._lastSpaceAt != null && t - this._lastSpaceAt < DOUBLE_TAP) {
+              this.flying = false; this._vy = 0; this._lastSpaceAt = null;
+            } else { this._lastSpaceAt = t; }
+          } else {
+            this._lastSpaceAt = t;
+            if (!this.crouching && this.grounded) this._jumpQueued = true;
+          }
+        }
+        return;
+      }
       // E (grounded): tap = jump, hold = take off (update() promotes a sustained
       // hold to flight). `== null` ignores OS key-repeat so the timer isn't reset.
       // While flying, E is "ascend" — it falls through to the movement-key set.
@@ -497,10 +531,28 @@ export class PlayerController {
   }
 
   // Ease the orbit pivot back to the avatar (Escape), then resume chase camera.
+  // Returns true if there was a focus to clear (so the caller can fall back to
+  // recentering the chase camera when there wasn't).
   clearFocus() {
-    if (!this.focusPoint && !this._unfocusing) return;
+    if (!this.focusPoint && !this._unfocusing) return false;
     this.focusPoint = null;
     this._unfocusing = true;
+    return true;
+  }
+
+  // Snap the chase camera directly behind the avatar at the resting pitch AND
+  // distance — used by Escape to undo a zoom-out and reframe behind the figure.
+  recenterBehind() {
+    if (this.focusPoint || this._unfocusing) return;
+    const offset = this._orbitOffset.copy(this.camera.position).sub(this.controls.target);
+    const s = this._spherical.setFromVector3(offset);
+    s.theta = this._behindTheta();
+    s.phi = CAM_DEFAULT_PHI;
+    s.radius = CAM_DEFAULT_DIST * this.scale;
+    offset.setFromSpherical(s);
+    this.camera.position.copy(this.controls.target).add(offset);
+    this._camManualUntil = 0;
+    this.controls.update();
   }
 
   _easeOrbitPivot(goal, dt) {
@@ -600,8 +652,8 @@ export class PlayerController {
     this.input.back = this._has('KeyS', 'ArrowDown') || pad.back;
     this.input.left = this._has('KeyA', 'ArrowLeft') || pad.left;
     this.input.right = this._has('KeyD', 'ArrowRight') || pad.right;
-    this.input.up = this._has('KeyE') || (this.flying && pad.up);
-    this.input.down = this._has('KeyC') || (this.flying && pad.down);
+    this.input.up = this._has('KeyE', 'PageUp') || (this.flying && pad.up);
+    this.input.down = this._has('KeyC', 'PageDown') || (this.flying && pad.down);
     this.input.run = this._has('ShiftLeft', 'ShiftRight') || pad.run;
     const inp = this.input;
 
@@ -635,6 +687,7 @@ export class PlayerController {
       this._vy = 0;
       this.crouching = false;
       this._jumpForwardBoost = 0;
+      this._lastSpaceAt = null; // don't let a pre-takeoff jump tap count toward stop-flying
       this._eConsumed = true; // so the eventual key-up doesn't also jump
     }
 
@@ -648,10 +701,30 @@ export class PlayerController {
     // Analog stick scales speed; keyboard always moves at full magnitude.
     const moveMag = pad.active && !this._has('KeyW', 'KeyS', 'ArrowUp', 'ArrowDown') ? pad.move : 1;
     const facing = this._facing.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-    const speed = (this.crouching ? CROUCH_SPEED : inp.run ? this.runSpeed : this.walkSpeed) * S;
+    // Flying glides much faster than walking/running; on the ground use the
+    // walk/run/crouch speeds as before.
+    const speed = (this.flying
+      ? this.flySpeed * (inp.run ? FLY_FWD_RUN_FACTOR : FLY_FWD_FACTOR)
+      : this.crouching ? CROUCH_SPEED : inp.run ? this.runSpeed : this.walkSpeed) * S;
     let dx = 0, dz = 0;
     if (inp.forward) { dx += facing.x * speed * dt * moveMag; dz += facing.z * speed * dt * moveMag; }
     if (inp.back) { dx -= facing.x * speed * BACK_FACTOR * dt * moveMag; dz -= facing.z * speed * BACK_FACTOR * dt * moveMag; }
+
+    // Horizontal momentum across the flight boundary. While flying, remember the
+    // current horizontal velocity; the frame flight ends we keep applying it
+    // (on top of any air steering) and bleed it off, so cutting flight at speed
+    // carries you forward instead of stopping dead. Grounded = friction clears it.
+    if (this.flying) {
+      this._airVelX = dt > 0 ? dx / dt : 0;
+      this._airVelZ = dt > 0 ? dz / dt : 0;
+    } else if (this.grounded) {
+      this._airVelX = 0; this._airVelZ = 0;
+    } else {
+      dx += this._airVelX * dt;
+      dz += this._airVelZ * dt;
+      const k = Math.exp(-FLIGHT_EXIT_DRAG * dt);
+      this._airVelX *= k; this._airVelZ *= k;
+    }
 
     // Modest forward punch when sprinting into a jump (decays over ~0.2 s in the air).
     if (this._jumpForwardBoost > 0 && !this.flying) {
@@ -737,6 +810,7 @@ export class PlayerController {
     this.flying = false;
     this.crouching = false;
     this._jumpForwardBoost = 0;
+    this._airVelX = 0; this._airVelZ = 0;
     this._reframe = true; // reframe the chase camera so it doesn't lurch across the map
   }
 }

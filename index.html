@@ -809,7 +809,7 @@
       "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.tsl.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
       "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar@0.2.0/index.js",
-      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.0/index.js",
+      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.1/index.js",
       "metaverse-sky": "https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.1/index.js",
       "metaverse-celestial": "https://cdn.jsdelivr.net/npm/metaverse-celestial@0.2.0/index.js",
       "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
@@ -997,7 +997,7 @@
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
     const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.2.0/models/';
-    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.0/texture';
+    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.1/texture';
     const SKY_TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.1/textures';
     function installMobileControls(player) {
       const root = document.getElementById('mobile-controls');
@@ -1482,7 +1482,9 @@
         e.stopPropagation();
         return;
       }
-      player.clearFocus();
+      // No dialog/focus to dismiss: snap the chase camera back behind the avatar
+      // at the normal distance (undo a zoom-out).
+      if (!player.clearFocus()) player.recenterBehind();
     }, true);
 
     // ---- loop -------------------------------------------------------------

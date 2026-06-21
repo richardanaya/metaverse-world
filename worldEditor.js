@@ -527,6 +527,13 @@ export class WorldEditor {
     const originals = this.selection.slice();
     if (!originals.length) return;
 
+    // Bake the live gizmo/pivot transform back onto each mesh first. While
+    // selected the meshes ride under `_pivot`; if it carries a (possibly
+    // non-uniform) scale or rotation, decomposing their world matrix in
+    // cloneBlock would shear and produce a wrong copy. Releasing re-parents them
+    // to their real parents with a clean per-mesh transform so the clone matches.
+    this._releasePivot();
+
     const map = new Map();
     for (const o of originals) map.set(o, this.blocks.cloneBlock(o));
     for (const o of originals) {

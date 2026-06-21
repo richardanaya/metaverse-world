@@ -1,21 +1,24 @@
 // TerrainEditor — a floating sidebar to sculpt and configure the terrain.
 //
 // Opened from the right-click menu ("Edit terrain"). While open it:
-//   • Left-drag on the terrain paints with the active brush (Raise / Lower /
-//     Flatten). Hold Shift to temporarily invert to Lower. The brush ring shows
-//     where you'll paint.
+//   • Left-press on the terrain paints with the active brush (Raise / Lower /
+//     Flatten). The brush keeps applying while the button is held even if the
+//     mouse stays still, so you can hold to keep raising/lowering one spot. Hold
+//     Shift to temporarily invert to Lower. The brush ring shows where you paint.
 //   • A sidebar exposes brush, layer heights, tiling, PBR, textures, physics,
 //     and terrain actions (randomize / flatten / export heightmap).
 //   • Done closes the editor.
 //
-// Painting is wired with the library's bindTerrainPainting helper. Sculpting
-// changes the heightmap, which makes the physics collider stale — so after every
-// stroke (and after Randomize / Flatten) we rebuild the controller's terrain
-// collider so what you walk on matches what you see.
+// Painting is wired with a small local binding (built on the library's
+// getTerrainHitFromPointer) that ticks the brush on every animation frame while
+// the button is down. Sculpting changes the heightmap, which makes the physics
+// collider stale — so after every stroke (and after Randomize / Flatten) we
+// rebuild the controller's terrain collider so what you walk on matches what you
+// see.
 
 import * as THREE from 'three';
 import { showPanel, hidePanel } from './panelFade.js';
-import { bindTerrainPainting, TERRAIN_TEXTURE_LAYERS, PBR_CHANNELS, loadPBRTextureSet } from 'metaverse-terrain';
+import { getTerrainHitFromPointer, TERRAIN_TEXTURE_LAYERS, PBR_CHANNELS, loadPBRTextureSet } from 'metaverse-terrain';
 
 const LAYER_LABELS = { sand: 'Sand', grass: 'Grass', rock: 'Rock', snow: 'Snow', water: 'Water' };
 const PBR_CHANNEL_LABELS = { metal: 'M', roughness: 'R', normal: 'N', ao: 'AO' };
@@ -460,15 +463,88 @@ export class TerrainEditor {
     for (const [m, b] of Object.entries(this._modeButtons)) b.classList.toggle('active', m === next);
   }
 
+  // Custom painting binding: like the library's bindTerrainPainting, but it
+  // re-applies the brush every animation frame while the button is held — so you
+  // don't need to keep wiggling the mouse to keep raising/lowering. The brush
+  // tracks the latest cursor hit; if the cursor leaves the terrain it pauses.
   _bindPaint() {
     if (this._binding) return;
-    this._binding = bindTerrainPainting(this.terrain, {
-      domElement: this.dom,
-      camera: this.camera,
-      raycaster: this.raycaster,
-      pointer: this.pointer,
-      setControlsEnabled: (on) => { this.orbit.enabled = on; },
-    });
+    const region = this.terrain;
+    const dom = this.dom;
+    const getHit = (e) => getTerrainHitFromPointer(
+      region, dom, this.camera, this.raycaster, this.pointer, e.clientX, e.clientY,
+    );
+
+    let painting = false;
+    let lastPoint = null;   // latest terrain hit (null = cursor off-terrain, paint pauses)
+    let shiftDown = false;
+    let raf = null;
+
+    const apply = (point) => region.paintAt(point, { temporaryLower: shiftDown, live: true, emit: false });
+    const tick = () => {
+      raf = painting ? requestAnimationFrame(tick) : null;
+      if (painting && lastPoint) apply(lastPoint);
+    };
+
+    const onDown = (e) => {
+      if (e.button !== 0) return;
+      const hit = getHit(e);
+      if (!hit) return;
+      painting = true;
+      shiftDown = e.shiftKey;
+      lastPoint = hit.point.clone();
+      region.beginStroke();
+      this.orbit.enabled = false;
+      dom.setPointerCapture(e.pointerId);
+      apply(lastPoint);
+      if (!raf) raf = requestAnimationFrame(tick);
+    };
+
+    const onMove = (e) => {
+      shiftDown = e.shiftKey;
+      const hit = getHit(e);
+      if (!hit) {
+        if (region.brushCursor) region.brushCursor.visible = false;
+        lastPoint = null; // off-terrain: pause continuous paint until back on
+        return;
+      }
+      const previewMode = e.shiftKey ? 'lower' : region.brush.mode;
+      if (region.brushCursor) region.updateBrushCursor(region.brushCursor, hit.point, { mode: previewMode });
+      if (painting) lastPoint = hit.point.clone();
+    };
+
+    const onUp = (e) => {
+      if (!painting) return;
+      painting = false;
+      lastPoint = null;
+      if (raf) { cancelAnimationFrame(raf); raf = null; }
+      region.endStroke();
+      this.orbit.enabled = true;
+      if (dom.hasPointerCapture(e.pointerId)) dom.releasePointerCapture(e.pointerId);
+    };
+
+    const onLeave = () => { if (!painting && region.brushCursor) region.brushCursor.visible = false; };
+    const onCtx = (e) => e.preventDefault();
+
+    dom.addEventListener('contextmenu', onCtx);
+    dom.addEventListener('pointerdown', onDown);
+    dom.addEventListener('pointermove', onMove);
+    dom.addEventListener('pointerup', onUp);
+    dom.addEventListener('pointercancel', onUp);
+    dom.addEventListener('pointerleave', onLeave);
+
+    this._binding = {
+      unbind() {
+        painting = false;
+        if (raf) { cancelAnimationFrame(raf); raf = null; }
+        dom.removeEventListener('contextmenu', onCtx);
+        dom.removeEventListener('pointerdown', onDown);
+        dom.removeEventListener('pointermove', onMove);
+        dom.removeEventListener('pointerup', onUp);
+        dom.removeEventListener('pointercancel', onUp);
+        dom.removeEventListener('pointerleave', onLeave);
+      },
+    };
   }
 
   _unbindPaint() {
