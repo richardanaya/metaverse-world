@@ -1035,9 +1035,12 @@
         btn.addEventListener('pointercancel', () => set(false));
         btn.addEventListener('lostpointercapture', () => set(false));
       });
+      // Toggle / tap buttons fire on pointerdown rather than click: synthetic
+      // click events are unreliable during multi-touch (e.g. while a finger is
+      // holding the joystick), which made Run/Fly impossible to trigger mid-walk.
       root.querySelectorAll('[data-mobile-toggle]').forEach((btn) => {
         const name = btn.dataset.mobileToggle;
-        btn.addEventListener('click', (e) => {
+        btn.addEventListener('pointerdown', (e) => {
           e.preventDefault();
           const on = !btn.classList.contains('active');
           btn.classList.toggle('active', on);
@@ -1045,7 +1048,7 @@
         });
       });
       root.querySelectorAll('[data-mobile-tap]').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
+        btn.addEventListener('pointerdown', (e) => {
           e.preventDefault();
           player.tapMobileAction(btn.dataset.mobileTap);
           if (btn.dataset.mobileTap === 'fly') btn.classList.toggle('active');
