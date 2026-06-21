@@ -852,16 +852,16 @@
     <label class="camera-check"><input id="camera-dof-enabled" type="checkbox" checked /> Depth of field</label>
     <label class="camera-check"><input id="camera-dof-auto" type="checkbox" checked /> Focus on camera target</label>
     <label class="camera-row">
-      <span class="camera-row-head"><span>Focus distance</span><b id="camera-dof-focus-value">55m</b></span>
-      <input id="camera-dof-focus" type="range" min="1" max="220" step="1" value="55" />
+      <span class="camera-row-head"><span>Focus distance</span><b id="camera-dof-focus-value">20m</b></span>
+      <input id="camera-dof-focus" type="range" min="1" max="220" step="1" value="20" />
     </label>
     <label class="camera-row">
-      <span class="camera-row-head"><span>Aperture</span><b id="camera-dof-aperture-value">0.00032</b></span>
-      <input id="camera-dof-aperture" type="range" min="0" max="0.0006" step="0.00001" value="0.00032" />
+      <span class="camera-row-head"><span>Focus range</span><b id="camera-dof-range-value">35m</b></span>
+      <input id="camera-dof-range" type="range" min="2" max="120" step="1" value="35" />
     </label>
     <label class="camera-row">
-      <span class="camera-row-head"><span>Max blur</span><b id="camera-dof-maxblur-value">0.003</b></span>
-      <input id="camera-dof-maxblur" type="range" min="0" max="0.03" step="0.001" value="0.003" />
+      <span class="camera-row-head"><span>Bokeh scale</span><b id="camera-dof-bokeh-value">3.0</b></span>
+      <input id="camera-dof-bokeh" type="range" min="0" max="10" step="0.5" value="3" />
     </label>
     <div class="camera-section">Render</div>
     <label class="camera-row">
@@ -975,6 +975,8 @@
 
   <script type="module">
     import * as THREE from 'three/webgpu';
+    import { pass, uniform } from 'three/tsl';
+    import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
     import { Avatar } from 'metaverse-avatar';
@@ -1137,27 +1139,43 @@
     const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 900);
     camera.position.set(40, 40, 60);
 
-    // The WebGL EffectComposer/BokehPass path is intentionally disabled for
-    // WebGPU. Keep a tiny compatibility object so the existing camera panel can
-    // continue to show the previous controls without trying to run WebGL passes.
+    // Depth of field via WebGPU TSL post-processing (three's DepthOfFieldNode).
+    // The scene is rendered through a PostProcessing pipeline whose output is the
+    // DOF node; uniforms drive the focus plane, the in-focus depth range, and the
+    // bokeh size. `enabled` toggles between the DOF pipeline and a plain render.
+    // On by default. Auto-focus tracks the orbit/chase target distance.
+    const dofState = { enabled: true, autoFocus: true };
+    const dofFocusDistance = uniform(20);  // world units along the look direction
+    const dofFocusRange = uniform(35);     // world units before fully out of focus
+    const dofBokehScale = uniform(3);      // unitless artistic blur size
+    // Keep a back-compat shape for the debug handle / old references.
     const dofPass = {
-      enabled: false,
-      uniforms: {
-        focus: { value: 55 },
-        aperture: { value: 0.00032 },
-        maxblur: { value: 0.003 },
-      },
+      get enabled() { return dofState.enabled; },
+      set enabled(v) { dofState.enabled = v; },
+      uniforms: { focus: dofFocusDistance, aperture: dofFocusRange, maxblur: dofBokehScale },
     };
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    const cameraSettings = { dofAutoFocus: true };
+
+    const scenePass = pass(scene, camera);
+    const dofNode = dof(
+      scenePass.getTextureNode(),
+      scenePass.getViewZNode(),
+      dofFocusDistance, dofFocusRange, dofBokehScale,
+    );
+    const postProcessing = new THREE.PostProcessing(renderer);
+    postProcessing.outputNode = dofNode;
+
+    // Per-frame: when auto-focus is on, lock the focus plane to the distance from
+    // the camera to its orbit target (the avatar while chasing), and reflect it in
+    // the (disabled) focus slider so the panel stays in sync.
     const updateDepthOfField = () => {
-      if (!dofPass.enabled || !cameraSettings.dofAutoFocus) return;
-      dofPass.uniforms.focus.value = camera.position.distanceTo(controls.target);
+      if (!dofState.enabled || !dofState.autoFocus) return;
+      const focus = camera.position.distanceTo(controls.target);
+      dofFocusDistance.value = focus;
       const focusValue = document.getElementById('camera-dof-focus-value');
       const focusInput = document.getElementById('camera-dof-focus');
-      const focus = dofPass.uniforms.focus.value;
       if (focusValue) focusValue.textContent = `${Math.round(focus)}m`;
       if (focusInput) focusInput.value = String(THREE.MathUtils.clamp(Math.round(focus), 1, 220));
     };
@@ -1173,10 +1191,10 @@
       const dofAuto = document.getElementById('camera-dof-auto');
       const dofFocus = document.getElementById('camera-dof-focus');
       const dofFocusValue = document.getElementById('camera-dof-focus-value');
-      const dofAperture = document.getElementById('camera-dof-aperture');
-      const dofApertureValue = document.getElementById('camera-dof-aperture-value');
-      const dofMaxblur = document.getElementById('camera-dof-maxblur');
-      const dofMaxblurValue = document.getElementById('camera-dof-maxblur-value');
+      const dofRange = document.getElementById('camera-dof-range');
+      const dofRangeValue = document.getElementById('camera-dof-range-value');
+      const dofBokeh = document.getElementById('camera-dof-bokeh');
+      const dofBokehValue = document.getElementById('camera-dof-bokeh-value');
       const aaSamples = document.getElementById('camera-aa-samples');
 
       const toneMaps = [
@@ -1223,19 +1241,19 @@
         camera.updateProjectionMatrix();
         fovValue.textContent = `${Math.round(camera.fov)}°`;
       });
-      dofEnabled.addEventListener('change', () => { dofPass.enabled = dofEnabled.checked; });
-      dofAuto.addEventListener('change', () => { cameraSettings.dofAutoFocus = dofAuto.checked; dofFocus.disabled = dofAuto.checked; });
+      dofEnabled.addEventListener('change', () => { dofState.enabled = dofEnabled.checked; });
+      dofAuto.addEventListener('change', () => { dofState.autoFocus = dofAuto.checked; dofFocus.disabled = dofAuto.checked; });
       dofFocus.addEventListener('input', () => {
-        dofPass.uniforms.focus.value = Number(dofFocus.value);
+        dofFocusDistance.value = Number(dofFocus.value);
         dofFocusValue.textContent = `${Math.round(Number(dofFocus.value))}m`;
       });
-      dofAperture.addEventListener('input', () => {
-        dofPass.uniforms.aperture.value = Number(dofAperture.value);
-        dofApertureValue.textContent = Number(dofAperture.value).toFixed(5);
+      dofRange.addEventListener('input', () => {
+        dofFocusRange.value = Number(dofRange.value);
+        dofRangeValue.textContent = `${Math.round(Number(dofRange.value))}m`;
       });
-      dofMaxblur.addEventListener('input', () => {
-        dofPass.uniforms.maxblur.value = Number(dofMaxblur.value);
-        dofMaxblurValue.textContent = Number(dofMaxblur.value).toFixed(3);
+      dofBokeh.addEventListener('input', () => {
+        dofBokehScale.value = Number(dofBokeh.value);
+        dofBokehValue.textContent = Number(dofBokeh.value).toFixed(1);
       });
       aaSamples.disabled = true;
       aaSamples.title = 'Antialiasing is controlled by WebGPURenderer.';
@@ -1244,9 +1262,13 @@
       exposureValue.textContent = renderer.toneMappingExposure.toFixed(2);
       fov.value = String(camera.fov);
       fovValue.textContent = `${Math.round(camera.fov)}°`;
-      dofEnabled.checked = dofPass.enabled;
-      dofAuto.checked = cameraSettings.dofAutoFocus;
-      dofFocus.disabled = cameraSettings.dofAutoFocus;
+      dofEnabled.checked = dofState.enabled;
+      dofAuto.checked = dofState.autoFocus;
+      dofFocus.disabled = dofState.autoFocus;
+      dofRange.value = String(dofFocusRange.value);
+      dofRangeValue.textContent = `${Math.round(dofFocusRange.value)}m`;
+      dofBokeh.value = String(dofBokehScale.value);
+      dofBokehValue.textContent = Number(dofBokehScale.value).toFixed(1);
     };
     setupCameraPanel();
 
@@ -1256,7 +1278,7 @@
     const sky = createAtmosphereSky({
       scale: 450,
       turbidity: 8,
-      rayleigh: 2.2,
+      rayleigh: 0.4,
       mieCoefficient: 0.005,
       mieDirectionalG: 0.8,
       sunPosition: [0.45, 0.86, 0.24],
@@ -1557,7 +1579,8 @@
       clouds.update(dt);
       precipitation.update(dt);
       updateDepthOfField();
-      renderer.render(scene, camera);
+      if (dofState.enabled) postProcessing.render();
+      else renderer.render(scene, camera);
     });
 
     window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, renderer, dofPass, worldWind, worldSunDirection }; // TEMP debug handle
