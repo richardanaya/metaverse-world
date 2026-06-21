@@ -1102,8 +1102,13 @@
     document.body.appendChild(renderer.domElement);
 
     const rendererNameEl = document.getElementById('topbar-renderer');
-    if (rendererNameEl) rendererNameEl.textContent = 'WEBGPU';
-    console.log('[Metaverse] Using WebGPURenderer.');
+    const rendererBackendName = renderer.backend?.isWebGPUBackend
+      ? 'WEBGPU'
+      : renderer.backend?.isWebGLBackend
+        ? 'WEBGL'
+        : 'UNKNOWN';
+    if (rendererNameEl) rendererNameEl.textContent = rendererBackendName;
+    console.log(`[Metaverse] Using ${rendererBackendName} backend via WebGPURenderer.`, renderer.backend);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x9fb7d5);
