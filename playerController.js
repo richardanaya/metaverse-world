@@ -89,10 +89,15 @@ export class PlayerController {
     };
     Object.assign(this, this._physicsDefaults); // live, tunable copies
 
-    // Gamepad hold-to-fly bookkeeping (A button), mirroring the keyboard E hold.
+    // Gamepad / mobile hold-to-fly bookkeeping (A / jump button), mirroring the keyboard E hold.
     this._padPrev = null;
     this._padAAt = null;
     this._padAConsumed = false;
+    this._mobileInput = {
+      active: false, forward: false, back: false, left: false, right: false,
+      up: false, down: false, run: false, turn: 0, move: 1, orbitX: 0, orbitY: 0,
+      aDown: false, toggleFly: false, toggleCrouch: false, recenter: false,
+    };
 
     // Follow-camera state: `_userOrbiting` is true while the mouse is dragging the
     // orbit; `_camManualUntil` blocks auto-follow briefly after any manual input.
@@ -305,12 +310,50 @@ export class PlayerController {
   // the avatar (X = turn, Y = forward/back analog); RIGHT stick orbits the
   // camera. A = jump (tap) / take off (hold) / ascend while flying; B = crouch /
   // descend while flying; Y = toggle flight; RB or a full forward push = run.
-  _readGamepad() {
-    const out = {
+  _emptyInput() {
+    return {
       active: false, forward: false, back: false, left: false, right: false,
       up: false, down: false, run: false, turn: 0, move: 1, orbitX: 0, orbitY: 0,
       aDown: false, toggleFly: false, toggleCrouch: false, recenter: false,
     };
+  }
+
+  // Public hooks used by the mobile touch overlay.
+  setMobileMove(x = 0, y = 0) {
+    const clamp = (v) => Math.max(-1, Math.min(1, Number.isFinite(v) ? v : 0));
+    x = clamp(x); y = clamp(y);
+    const active = Math.hypot(x, y) > 0.08;
+    Object.assign(this._mobileInput, {
+      active, forward: y < -0.18, back: y > 0.18,
+      left: false, right: false, turn: active ? -x : 0,
+      move: active ? Math.min(1, Math.max(Math.abs(y), Math.abs(x) * 0.35)) : 1,
+    });
+  }
+
+  setMobileButton(name, down) {
+    if (name === 'jump') this._mobileInput.aDown = !!down;
+    else if (name === 'run') this._mobileInput.run = !!down;
+    else if (name === 'up') this._mobileInput.up = !!down;
+    else if (name === 'down') this._mobileInput.down = !!down;
+  }
+
+  tapMobileAction(name) {
+    if (name === 'fly') this._mobileInput.toggleFly = true;
+    else if (name === 'crouch') this._mobileInput.toggleCrouch = true;
+    else if (name === 'recenter') this._mobileInput.recenter = true;
+  }
+
+  _readMobile() {
+    const out = { ...this._mobileInput };
+    if (!this.inputEnabled || this.posing) return this._emptyInput();
+    this._mobileInput.toggleFly = false;
+    this._mobileInput.toggleCrouch = false;
+    this._mobileInput.recenter = false;
+    return out;
+  }
+
+  _readGamepad() {
+    const out = this._emptyInput();
     if (!this.inputEnabled || !navigator.getGamepads) { this._padPrev = null; return out; }
 
     let gp = null;
@@ -534,37 +577,56 @@ export class PlayerController {
 
     const now = performance.now() / 1000;
     const gp = this._readGamepad();
-    this.input.forward = this._has('KeyW', 'ArrowUp') || gp.forward;
-    this.input.back = this._has('KeyS', 'ArrowDown') || gp.back;
-    this.input.left = this._has('KeyA', 'ArrowLeft') || gp.left;
-    this.input.right = this._has('KeyD', 'ArrowRight') || gp.right;
-    this.input.up = this._has('KeyE') || (this.flying && gp.up);
-    this.input.down = this._has('KeyC') || (this.flying && gp.down);
-    this.input.run = this._has('ShiftLeft', 'ShiftRight') || gp.run;
+    const mob = this._readMobile();
+    const pad = {
+      active: gp.active || mob.active,
+      forward: gp.forward || mob.forward,
+      back: gp.back || mob.back,
+      left: gp.left || mob.left,
+      right: gp.right || mob.right,
+      up: gp.up || mob.up,
+      down: gp.down || mob.down,
+      run: gp.run || mob.run,
+      turn: Math.max(-1, Math.min(1, gp.turn + mob.turn)),
+      move: mob.active ? mob.move : gp.move,
+      orbitX: gp.orbitX || mob.orbitX,
+      orbitY: gp.orbitY || mob.orbitY,
+      aDown: gp.aDown || mob.aDown,
+      toggleFly: gp.toggleFly || mob.toggleFly,
+      toggleCrouch: gp.toggleCrouch || mob.toggleCrouch,
+      recenter: gp.recenter || mob.recenter,
+    };
+    this.input.forward = this._has('KeyW', 'ArrowUp') || pad.forward;
+    this.input.back = this._has('KeyS', 'ArrowDown') || pad.back;
+    this.input.left = this._has('KeyA', 'ArrowLeft') || pad.left;
+    this.input.right = this._has('KeyD', 'ArrowRight') || pad.right;
+    this.input.up = this._has('KeyE') || (this.flying && pad.up);
+    this.input.down = this._has('KeyC') || (this.flying && pad.down);
+    this.input.run = this._has('ShiftLeft', 'ShiftRight') || pad.run;
     const inp = this.input;
 
-    // ---- gamepad: Y toggles flight, B (grounded) toggles crouch ----
-    if (gp.toggleFly) { this.flying = !this.flying; this._vy = 0; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } }
-    if (gp.toggleCrouch && !this.flying && this.grounded) this.crouching = !this.crouching;
+    // ---- gamepad / mobile: toggle flight, crouch ----
+    if (pad.toggleFly) { this.flying = !this.flying; this._vy = 0; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } }
+    if (pad.toggleCrouch && !this.flying && this.grounded) this.crouching = !this.crouching;
 
-    // ---- gamepad A: tap = jump, hold = take off into flight (like keyboard E) ----
-    if (gp.aDown && !this.flying && this.grounded && this._padAAt == null) {
+    // ---- gamepad A / mobile jump: tap = jump, hold = take off into flight (like keyboard E) ----
+    if (pad.aDown && !this.flying && this.grounded && this._padAAt == null) {
       this._padAAt = now; this._padAConsumed = false;
     }
     if (this._padAAt != null && !this.flying && !this._padAConsumed && now - this._padAAt > E_HOLD) {
       this.flying = true; this._vy = 0; this.crouching = false; this._jumpForwardBoost = 0; this._padAConsumed = true;
     }
-    if (!gp.aDown && this._padAAt != null) {
+    if (!pad.aDown && this._padAAt != null) {
       if (!this.flying && !this._padAConsumed && !this.crouching && this.grounded) this._jumpQueued = true;
       this._padAAt = null; this._padAConsumed = false;
     }
 
     // ---- gamepad right stick: orbit the chase camera (manual control) ----
-    if (gp.orbitX || gp.orbitY) {
-      this._orbitCamera(gp.orbitX, gp.orbitY, dt);
+    if (pad.orbitX || pad.orbitY) {
+      this._orbitCamera(pad.orbitX, pad.orbitY, dt);
       this._camManualUntil = now + CAM_MANUAL_COOLDOWN;
     }
-    if (gp.recenter) this._recenterCamera(); // R3 — snap behind
+    if (pad.recenter) this._recenterCamera(); // R3 / mobile button — snap behind
 
     // ---- E held past the threshold (grounded) -> take off into flight ----
     if (this._ePressedAt != null && !this.flying && !this._eConsumed &&
@@ -578,13 +640,13 @@ export class PlayerController {
 
     // ---- turn (rotates the figure; movement follows facing) ----
     // Keyboard / d-pad contribute ±1; the analog stick adds a fractional turn.
-    let turn = (inp.left ? 1 : 0) - (inp.right ? 1 : 0) + gp.turn;
+    let turn = (inp.left ? 1 : 0) - (inp.right ? 1 : 0) + pad.turn;
     turn = Math.max(-1, Math.min(1, turn));
     this.yaw += TURN_RATE * dt * turn;
 
     // ---- desired horizontal translation along facing ----
     // Analog stick scales speed; keyboard always moves at full magnitude.
-    const moveMag = gp.active && !this._has('KeyW', 'KeyS', 'ArrowUp', 'ArrowDown') ? gp.move : 1;
+    const moveMag = pad.active && !this._has('KeyW', 'KeyS', 'ArrowUp', 'ArrowDown') ? pad.move : 1;
     const facing = this._facing.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     const speed = (this.crouching ? CROUCH_SPEED : inp.run ? this.runSpeed : this.walkSpeed) * S;
     let dx = 0, dz = 0;

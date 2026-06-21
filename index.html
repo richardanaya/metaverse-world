@@ -681,6 +681,108 @@
     #boot-enter:disabled { color: var(--dim); border-color: var(--line); background: rgba(8,13,20,.5); cursor: progress;
       box-shadow: none; animation: pulse 1.6s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
+
+    /* Mobile movement tools: shown on touch/coarse-pointer devices. */
+    #mobile-controls {
+      position: fixed; inset: 0; z-index: 16; pointer-events: none; display: none;
+      touch-action: none; user-select: none; -webkit-user-select: none;
+      --pad: max(14px, env(safe-area-inset-bottom));
+    }
+    .mobile-joystick {
+      position: absolute; left: max(18px, env(safe-area-inset-left)); bottom: calc(var(--pad) + 16px);
+      width: 132px; height: 132px; border-radius: 50%; pointer-events: auto; touch-action: none;
+      background: radial-gradient(circle at 50% 50%, rgba(124,178,221,.08), rgba(6,11,18,.38));
+      border: 1px solid rgba(124,178,221,.42); box-shadow: 0 8px 30px rgba(0,0,0,.36), inset 0 0 22px rgba(124,178,221,.08);
+    }
+    .mobile-stick {
+      position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px;
+      border-radius: 50%; background: rgba(124,178,221,.24); border: 1px solid rgba(190,225,255,.7);
+      box-shadow: inset 0 0 14px rgba(255,255,255,.08); transform: translate(0,0);
+    }
+    .mobile-buttons {
+      position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: calc(var(--pad) + 12px);
+      width: 188px; height: 168px; pointer-events: auto;
+    }
+    .mobile-btn {
+      position: absolute; width: 54px; height: 42px;
+      border: 1px solid rgba(124,178,221,.46); border-radius: 999px; color: #dff1ff;
+      background: rgba(6,11,18,.48); font: 700 10px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+      box-shadow: 0 6px 20px rgba(0,0,0,.34); touch-action: none;
+    }
+    .mobile-btn.primary { width: 78px; height: 78px; right: 0; bottom: 0; background: rgba(124,178,221,.28); color: #fff; font-size: 11px; }
+    .mobile-btn.fly { right: 58px; top: 0; }
+    .mobile-btn.run { right: 84px; bottom: 28px; }
+    .mobile-btn.crouch { right: 0; top: 56px; }
+    .mobile-btn.up { left: 0; top: 42px; }
+    .mobile-btn.down { left: 0; bottom: 12px; }
+    .mobile-btn:active, .mobile-btn.active { background: rgba(124,178,221,.36); border-color: rgba(220,242,255,.85); }
+    @media (hover: none), (pointer: coarse), (max-width: 820px) {
+      #mobile-controls { display: block; }
+      #hud { display: none; }
+    }
+    @media (orientation: landscape) and (max-height: 520px) {
+      .mobile-joystick { width: 116px; height: 116px; bottom: max(12px, env(safe-area-inset-bottom)); }
+      .mobile-stick { width: 50px; height: 50px; margin: -25px 0 0 -25px; }
+      .mobile-buttons { width: 216px; height: 126px; bottom: max(10px, env(safe-area-inset-bottom)); }
+      .mobile-btn { width: 50px; height: 36px; font-size: 9px; }
+      .mobile-btn.primary { width: 70px; height: 70px; right: 0; bottom: 0; }
+      .mobile-btn.fly { right: 74px; top: 0; }
+      .mobile-btn.run { right: 76px; bottom: 6px; }
+      .mobile-btn.crouch { right: 0; top: 0; }
+      .mobile-btn.up { left: 0; top: 10px; }
+      .mobile-btn.down { left: 0; bottom: 10px; }
+      #hud { display: none; }
+    }
+
+    /* Mobile-friendly login / boot screen. */
+    @media (max-width: 640px), (max-height: 520px) {
+      #boot {
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .boot-strip {
+        height: auto; min-height: 34px; padding: 8px max(12px, env(safe-area-inset-left)) 8px max(12px, env(safe-area-inset-left));
+        gap: 9px; flex-wrap: wrap; font-size: 9px; letter-spacing: .11em;
+      }
+      .boot-strip.bottom { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+      .boot-strip .sep { display: none; }
+      .boot-core {
+        align-self: center;
+        width: min(420px, calc(100vw - 28px));
+        box-sizing: border-box;
+        padding: 24px 18px 20px;
+        margin: 12px 0;
+      }
+      .boot-title { font-size: clamp(20px, 8vw, 26px); letter-spacing: .22em; text-indent: .22em; }
+      .boot-sub { font-size: 9.5px; letter-spacing: .16em; margin-bottom: 18px; }
+      .boot-field {
+        flex-direction: column; align-items: stretch; gap: 6px;
+        padding: 10px 11px;
+      }
+      .boot-field label { font-size: 9px; }
+      .boot-field input, .boot-field .static {
+        text-align: left; font-size: 16px; letter-spacing: .08em; min-height: 24px;
+      }
+      .boot-log { margin: 12px 0 16px; }
+      .boot-log li { font-size: 9px; line-height: 1.45; }
+      #boot-enter { padding: 14px 0; font-size: 11px; letter-spacing: .18em; }
+    }
+    @media (orientation: landscape) and (max-height: 520px) {
+      #boot { grid-template-rows: 1fr; }
+      .boot-strip { display: none; }
+      .boot-core {
+        width: min(520px, calc(100vw - 32px));
+        padding: 18px 22px 16px;
+        margin: 10px auto;
+      }
+      .boot-title { font-size: 21px; margin-bottom: 4px; }
+      .boot-sub { margin-bottom: 12px; }
+      .boot-field { flex-direction: row; align-items: center; padding: 8px 10px; }
+      .boot-field input, .boot-field .static { font-size: 16px; }
+      .boot-log { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; margin: 10px 0 12px; }
+      #boot-enter { padding: 11px 0; }
+    }
   </style>
 
   <!-- CDN imports pinned to the current local metaverse-* package versions;
@@ -763,6 +865,18 @@
     <b>WASD</b> move · <b>Shift</b> run · <b>E</b> jump (hold to fly) · <b>X</b> crouch · <b>C</b> descend ·
     drag to orbit · <b>Alt-click</b> focus camera · <b>right-click</b> block / terrain / avatar / sky to edit · <b>Esc</b> recenter / exit
     <br><b>Gamepad</b> L-stick move/turn · R-stick camera · <b>R3</b> recenter · <b>A</b> jump (hold to fly) · <b>B</b> crouch · <b>Y</b> toggle fly · <b>RB</b> run
+  </div>
+
+  <div id="mobile-controls" aria-label="Mobile avatar movement controls">
+    <div class="mobile-joystick" id="mobile-joystick" aria-label="Move and turn"><div class="mobile-stick" id="mobile-stick"></div></div>
+    <div class="mobile-buttons" aria-label="Actions">
+      <button class="mobile-btn fly" data-mobile-tap="fly" type="button">Fly</button>
+      <button class="mobile-btn run" data-mobile-toggle="run" type="button">Run</button>
+      <button class="mobile-btn primary jump" data-mobile-hold="jump" type="button">Jump</button>
+      <button class="mobile-btn crouch" data-mobile-tap="crouch" type="button">Crouch</button>
+      <button class="mobile-btn up" data-mobile-hold="up" type="button">Up</button>
+      <button class="mobile-btn down" data-mobile-hold="down" type="button">Down</button>
+    </div>
   </div>
 
   <!-- boot / login screen -->
@@ -870,6 +984,60 @@
     const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.2.0/models/';
     const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.0/texture';
     const SKY_TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.0/textures';
+    function installMobileControls(player) {
+      const root = document.getElementById('mobile-controls');
+      const pad = document.getElementById('mobile-joystick');
+      const stick = document.getElementById('mobile-stick');
+      if (!root || !pad || !stick) return;
+
+      let pointerId = null;
+      const resetStick = () => {
+        pointerId = null;
+        stick.style.transform = 'translate(0, 0)';
+        player.setMobileMove(0, 0);
+      };
+      const moveStick = (e) => {
+        const r = pad.getBoundingClientRect();
+        const max = Math.min(r.width, r.height) * 0.38;
+        let dx = e.clientX - (r.left + r.width / 2);
+        let dy = e.clientY - (r.top + r.height / 2);
+        const len = Math.hypot(dx, dy);
+        if (len > max) { dx = dx / len * max; dy = dy / len * max; }
+        stick.style.transform = `translate(${dx}px, ${dy}px)`;
+        player.setMobileMove(dx / max, dy / max);
+      };
+      pad.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); pointerId = e.pointerId; pad.setPointerCapture(pointerId); moveStick(e);
+      });
+      pad.addEventListener('pointermove', (e) => { if (e.pointerId === pointerId) { e.preventDefault(); moveStick(e); } });
+      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) pad.addEventListener(type, resetStick);
+
+      root.querySelectorAll('[data-mobile-hold]').forEach((btn) => {
+        const name = btn.dataset.mobileHold;
+        const set = (down) => { btn.classList.toggle('active', down); player.setMobileButton(name, down); };
+        btn.addEventListener('pointerdown', (e) => { e.preventDefault(); btn.setPointerCapture(e.pointerId); set(true); });
+        btn.addEventListener('pointerup', (e) => { e.preventDefault(); set(false); });
+        btn.addEventListener('pointercancel', () => set(false));
+        btn.addEventListener('lostpointercapture', () => set(false));
+      });
+      root.querySelectorAll('[data-mobile-toggle]').forEach((btn) => {
+        const name = btn.dataset.mobileToggle;
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const on = !btn.classList.contains('active');
+          btn.classList.toggle('active', on);
+          player.setMobileButton(name, on);
+        });
+      });
+      root.querySelectorAll('[data-mobile-tap]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          player.tapMobileAction(btn.dataset.mobileTap);
+          if (btn.dataset.mobileTap === 'fly') btn.classList.toggle('active');
+        });
+      });
+    }
+
     const PBR_TEXTURE_URLS = {
       sand: {
         metal: `${TEXTURE_BASE}/terrain-sand_metal.png`,
@@ -1183,6 +1351,7 @@
     // ---- player controller (walk/run/jump/fly + terrain grounding) --------
     const player = new PlayerController({ avatar, terrain, camera, controls });
     await player.start();
+    installMobileControls(player);
 
     // Block placement shares the controller's physics world, so blocks are
     // instantly solid to the character capsule.
