@@ -14,7 +14,7 @@ import { showPanel, hidePanel } from './panelFade.js';
 
 const CONNECTION_PREFIX = 'mv1:';
 const SYNC_INTERVAL = 1 / 20;
-const LOCO_GLB = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.1.2/anims/UAL1_Standard.glb';
+const LOCO_GLB = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.2.0/anims/UAL1_Standard.glb';
 const LOCO_ANIMS = {
   walk: 'Walk_Loop',
   run: 'Jog_Fwd_Loop',

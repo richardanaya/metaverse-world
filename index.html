@@ -683,17 +683,19 @@
     @keyframes pulse { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
   </style>
 
-  <!-- three.js, the avatar, and the terrain — all from the jsDelivr CDN via an
-       import map. three is a peer dependency both libraries share. -->
+  <!-- CDN imports pinned to the current local metaverse-* package versions;
+       three is routed through its WebGPU build like the sibling examples. -->
   <script type="importmap">
   {
     "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+      "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
+      "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.tsl.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
-      "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar@0.1.2/index.js",
-      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.4/index.js",
-      "metaverse-sky": "https://cdn.jsdelivr.net/npm/metaverse-sky@0.1.0/index.js",
-      "metaverse-celestial": "https://cdn.jsdelivr.net/npm/metaverse-celestial@0.1.2/index.js",
+      "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar@0.2.0/index.js",
+      "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.0/index.js",
+      "metaverse-sky": "https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.0/index.js",
+      "metaverse-celestial": "https://cdn.jsdelivr.net/npm/metaverse-celestial@0.2.0/index.js",
       "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
     }
   }
@@ -843,13 +845,9 @@
   </script>
 
   <script type="module">
-    import * as THREE from 'three';
+    import * as THREE from 'three/webgpu';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-    import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
-    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
     import { Avatar } from 'metaverse-avatar';
     import {
       TerrainRegion, loadPBRTextureSet,
@@ -869,9 +867,9 @@
 
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
     // textures, terrain layer PNGs).
-    const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.1.2/models/';
-    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.3.4/texture';
-    const SKY_TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-sky@0.1.0/textures';
+    const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.2.0/models/';
+    const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.0/texture';
+    const SKY_TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.0/textures';
     const PBR_TEXTURE_URLS = {
       sand: {
         metal: `${TEXTURE_BASE}/terrain-sand_metal.png`,
@@ -905,54 +903,24 @@
       },
     };
 
-    // ---- WebGPU detection -------------------------------------------------
-    // Detect WebGPU support. We check for navigator.gpu and an adapter.
-    // NOTE: A full switch to THREE.WebGPURenderer is currently blocked because
-    // the sky (metaverse-sky), clouds, celestial bodies (metaverse-celestial),
-    // and the depth-of-field post-processing (EffectComposer/BokehPass) all use
-    // raw GLSL ShaderMaterials / WebGL2-only APIs that are incompatible with
-    // the WebGPU backend's node-based material system. Once those shaders are
-    // ported to TSL nodes, this is where the renderer selection would happen:
-    //   const renderer = hasWebGPU
-    //     ? new THREE.WebGPURenderer({ powerPreference: 'high-performance' })
-    //     : new THREE.WebGLRenderer({ powerPreference: 'high-performance' });
-    const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator;
-    (async () => {
-      let gpuAvailable = false;
-      if (hasWebGPU) {
-        try {
-          const adapter = await navigator.gpu.requestAdapter();
-          gpuAvailable = adapter !== null;
-        } catch { gpuAvailable = false; }
-      }
-      // Surface the result in the topbar and console.
-      const statusEl = document.getElementById('topbar-conn-text');
-      const backendLabel = gpuAvailable ? 'WEBGPU READY' : 'WEBGL2';
-      if (statusEl) {
-        statusEl.textContent = (statusEl.textContent.split('·')[0] + ' · ' + backendLabel).trim();
-      }
-      console.log(`[Metaverse] WebGPU: ${gpuAvailable ? 'available (not used — sky/clouds/DoF need TSL port)' : 'not available'}, using WebGL2.`);
-    })();
-
     // ---- renderer / scene -------------------------------------------------
-    // powerPreference: 'high-performance' is critical on Windows laptops with
-    // hybrid graphics (Intel iGPU + NVIDIA/AMD dGPU): Chrome's D3D11/ANGLE
-    // backend otherwise pins WebGL to the power-saving integrated GPU, which is
-    // the classic "fine on Linux/macOS, slow on Windows Chrome" cause.
-    // Cap the pixel ratio too — Windows desktops default to 125–150% scaling,
-    // and uncapped DPR × MSAA × DoF × a discard-heavy cloud shader is brutal on
-    // an iGPU. 2 is visually indistinguishable from native on most panels.
-    // Note: no antialias:true here — EffectComposer renders into its own
-    // target, so the renderer's MSAA never applies (it's dead config). The
-    // composer's render target `samples` below is what actually antialiases.
-    const renderer = new THREE.WebGLRenderer({ powerPreference: 'high-performance' });
-    renderer.setPixelRatio(1.0);
+    // Match the sibling metaverse-* examples: import from three/webgpu, create a
+    // WebGPURenderer, and await init() before constructing renderer-dependent
+    // helpers. Keep antialiasing on the renderer because WebGPU postprocessing
+    // is not wired up here.
+    const renderer = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance' });
+    await renderer.init();
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = false;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping; // the Sky shader expects tone mapping
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.6;
     document.body.appendChild(renderer.domElement);
+
+    const statusEl = document.getElementById('topbar-conn-text');
+    if (statusEl) statusEl.textContent = (statusEl.textContent.split('·')[0] + ' · WEBGPU').trim();
+    console.log('[Metaverse] Using WebGPURenderer.');
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x9fb7d5);
@@ -962,43 +930,33 @@
     const ELEVATION_MIN = -20;
     const ELEVATION_MAX = 90;
 
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    pmrem.compileEquirectangularShader();
     const environmentReady = (async () => {
       try {
         const hdr = await new RGBELoader().loadAsync(HDRI_URL);
-        scene.environment = pmrem.fromEquirectangular(hdr).texture;
+        // WebGPURenderer consumes equirectangular environment textures directly;
+        // PMREMGenerator is tied to the classic WebGL renderer path.
+        hdr.mapping = THREE.EquirectangularReflectionMapping;
+        scene.environment = hdr;
         scene.environmentIntensity = 1.0;
-        hdr.dispose();
       } catch (err) {
         console.warn('HDRI environment unavailable.', err);
-      } finally {
-        pmrem.dispose();
       }
     })();
 
     const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 900);
     camera.position.set(40, 40, 60);
 
-    const renderTarget = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 2 });
-    const composer = new EffectComposer(renderer, renderTarget);
-    composer.setPixelRatio(renderer.getPixelRatio());
-    composer.setSize(innerWidth, innerHeight);
-    composer.addPass(new RenderPass(scene, camera));
-    const dofPass = new BokehPass(scene, camera, {
-      focus: 55,
-      aperture: 0.00032,
-      maxblur: 0.003,
-    });
-    // DoF off by default — it's a full-frame extra pass and is one of the
-    // heaviest things on Windows/iGPU. Users can re-enable it from the Camera
-    // panel; the checkbox below reads this state at setup.
-    dofPass.enabled = false;
-    composer.addPass(dofPass);
-    const outputPass = new OutputPass();
-    outputPass.toneMapping = renderer.toneMapping;
-    outputPass.toneMappingExposure = renderer.toneMappingExposure;
-    composer.addPass(outputPass);
+    // The WebGL EffectComposer/BokehPass path is intentionally disabled for
+    // WebGPU. Keep a tiny compatibility object so the existing camera panel can
+    // continue to show the previous controls without trying to run WebGL passes.
+    const dofPass = {
+      enabled: false,
+      uniforms: {
+        focus: { value: 55 },
+        aperture: { value: 0.00032 },
+        maxblur: { value: 0.003 },
+      },
+    };
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -1064,11 +1022,9 @@
       toneMap.addEventListener('change', () => {
         const value = Number(toneMap.value);
         renderer.toneMapping = value;
-        outputPass.toneMapping = value;
       });
       exposure.addEventListener('input', () => {
         renderer.toneMappingExposure = Number(exposure.value);
-        outputPass.toneMappingExposure = Number(exposure.value);
         exposureValue.textContent = Number(exposure.value).toFixed(2);
       });
       fov.addEventListener('input', () => {
@@ -1090,11 +1046,8 @@
         dofPass.uniforms.maxblur.value = Number(dofMaxblur.value);
         dofMaxblurValue.textContent = Number(dofMaxblur.value).toFixed(3);
       });
-      aaSamples.addEventListener('change', () => {
-        const samples = Number(aaSamples.value);
-        if ('samples' in composer.renderTarget1) composer.renderTarget1.samples = samples;
-        if ('samples' in composer.renderTarget2) composer.renderTarget2.samples = samples;
-      });
+      aaSamples.disabled = true;
+      aaSamples.title = 'Antialiasing is controlled by WebGPURenderer.';
 
       exposure.value = String(renderer.toneMappingExposure);
       exposureValue.textContent = renderer.toneMappingExposure.toFixed(2);
@@ -1337,8 +1290,6 @@
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
-      composer.setPixelRatio(renderer.getPixelRatio());
-      composer.setSize(innerWidth, innerHeight);
     });
 
     syncEnvironmentLighting = () => {
@@ -1394,10 +1345,10 @@
       clouds.update(dt);
       precipitation.update(dt);
       updateDepthOfField();
-      composer.render(dt);
+      renderer.render(scene, camera);
     });
 
-    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, composer, dofPass, outputPass, worldWind, worldSunDirection }; // TEMP debug handle
+    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, renderer, dofPass, worldWind, worldSunDirection }; // TEMP debug handle
     // Everything is up — let the boot screen enable its ENTER button.
     window.__bootReady?.();
   </script>
