@@ -810,7 +810,7 @@
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
       "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar@0.2.0/index.js",
       "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.0/index.js",
-      "metaverse-sky": "https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.0/index.js",
+      "metaverse-sky": "https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.1/index.js",
       "metaverse-celestial": "https://cdn.jsdelivr.net/npm/metaverse-celestial@0.2.0/index.js",
       "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/rapier.mjs"
     }
@@ -982,7 +982,7 @@
       TerrainRegion, loadPBRTextureSet,
       DEFAULT_TEXTURE_HEIGHTS, DEFAULT_TEXTURE_BLEND_WIDTH,
     } from 'metaverse-terrain';
-    import { createAtmosphereSky, CloudLayer, Precipitation } from 'metaverse-sky';
+    import { createAtmosphereSky, CloudSkyLayer, Precipitation } from 'metaverse-sky';
     import { PlayerController } from './playerController.js';
     import { BlockSummoner } from './blocks.js';
     import { WorldEditor } from './worldEditor.js';
@@ -998,7 +998,7 @@
     // textures, terrain layer PNGs).
     const AVATAR_MODELS = 'https://cdn.jsdelivr.net/npm/metaverse-avatar@0.2.0/models/';
     const TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.0/texture';
-    const SKY_TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.0/textures';
+    const SKY_TEXTURE_BASE = 'https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.1/textures';
     function installMobileControls(player) {
       const root = document.getElementById('mobile-controls');
       const pad = document.getElementById('mobile-joystick');
@@ -1353,8 +1353,8 @@
     bindPBREnvironment(terrain.group);
     bindPBREnvironment(avatar.group);
 
-    // Procedural scrolling voxel cloud deck (instanced, sun-lit puffs).
-    const clouds = new CloudLayer({ scene, camera, sky, windDirection: worldWind.directionDeg, windSpeed: worldWind.speed });
+    // Fast procedural 2.5D sky-volume cloud layer.
+    const clouds = new CloudSkyLayer({ scene, camera, sky, windDirection: worldWind.directionDeg, windSpeed: worldWind.speed });
     clouds.init();
     const precipitation = new Precipitation({
       scene,
