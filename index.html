@@ -458,6 +458,7 @@
     #topbar .wm { color: var(--accent-2); font-weight: 600; letter-spacing: .26em; }
     #topbar .sep { flex: 1; }
     #topbar b { color: var(--accent); font-weight: 600; }
+    #topbar .topbar-perf b { color: #dff3ff; text-shadow: 0 0 10px rgba(124,178,221,.55); }
     #topbar .dot { color: #6fd08a; }
     #topbar .topbar-btn {
       pointer-events: auto; cursor: pointer; padding: 3px 10px;
@@ -719,6 +720,19 @@
     @media (hover: none), (pointer: coarse), (max-width: 820px) {
       #mobile-controls { display: block; }
       #hud { display: none; }
+      #topbar {
+        z-index: 18; height: auto; min-height: 36px; padding: 7px 10px 12px;
+        gap: 8px 10px; flex-wrap: wrap; align-content: flex-start;
+        font-size: 9px; letter-spacing: .08em;
+        background: linear-gradient(180deg, rgba(4,7,12,.98) 0%, rgba(4,7,12,.94) 82%, rgba(4,7,12,0) 100%);
+      }
+      #topbar .wm { letter-spacing: .18em; }
+      #topbar .sep { display: none; }
+      #topbar .topbar-perf {
+        padding: 3px 7px; border: 1px solid rgba(124,178,221,.32);
+        background: rgba(124,178,221,.10); border-radius: 2px;
+      }
+      #topbar .topbar-btn { display: none; }
     }
     @media (orientation: landscape) and (max-height: 520px) {
       .mobile-joystick { width: 116px; height: 116px; bottom: max(12px, env(safe-area-inset-bottom)); }
@@ -808,6 +822,7 @@
   <div id="topbar">
     <span class="wm">METAVERSE</span>
     <span>VER 0.1.0</span>
+    <span class="topbar-perf">GPU <b id="topbar-renderer">WEBGPU</b> · FPS <b id="topbar-fps">--</b></span>
     <span class="sep"></span>
     <span>SRVC <b id="topbar-peers">1 ONLINE</b></span>
     <span>SYS TIME <b data-clock>--:--:--</b></span>
@@ -1086,8 +1101,8 @@
     renderer.toneMappingExposure = 0.6;
     document.body.appendChild(renderer.domElement);
 
-    const statusEl = document.getElementById('topbar-conn-text');
-    if (statusEl) statusEl.textContent = (statusEl.textContent.split('·')[0] + ' · WEBGPU').trim();
+    const rendererNameEl = document.getElementById('topbar-renderer');
+    if (rendererNameEl) rendererNameEl.textContent = 'WEBGPU';
     console.log('[Metaverse] Using WebGPURenderer.');
 
     const scene = new THREE.Scene();
@@ -1240,6 +1255,14 @@
     });
     scene.add(sky);
     const celestialBodies = new CelestialBodies({ scene, camera, renderer }).init();
+    // Stars are additive transparent sprites in the celestial package. Force depth
+    // testing so terrain/avatar depth occludes them instead of letting them draw on top.
+    if (celestialBodies.stars) celestialBodies.stars.renderOrder = -100;
+    if (celestialBodies.starMaterial) {
+      celestialBodies.starMaterial.depthTest = true;
+      celestialBodies.starMaterial.depthWrite = false;
+      celestialBodies.starMaterial.needsUpdate = true;
+    }
     celestialBodies.setStars({ starSize: 0.25 });
     const worldSunDirection = sky.material.uniforms.sunPosition.value.clone().normalize();
     const worldWind = { directionDeg: 18, direction: new THREE.Vector2(Math.cos(THREE.MathUtils.degToRad(18)), Math.sin(THREE.MathUtils.degToRad(18))), speed: 0.08 };
@@ -1500,8 +1523,18 @@
     syncWorldWind();
 
     const clock = new THREE.Clock();
+    const fpsEl = document.getElementById('topbar-fps');
+    let fpsFrames = 0;
+    let fpsAccum = 0;
     renderer.setAnimationLoop(() => {
       const dt = clock.getDelta();
+      fpsFrames += 1;
+      fpsAccum += dt;
+      if (fpsAccum >= 0.5) {
+        if (fpsEl) fpsEl.textContent = String(Math.round(fpsFrames / fpsAccum));
+        fpsFrames = 0;
+        fpsAccum = 0;
+      }
       terrain.update(clock.elapsedTime); // animate the water
       syncEnvironmentLighting();
       avatar.update(dt);                 // pose, physics, blink, look-at
