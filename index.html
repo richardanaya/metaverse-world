@@ -448,6 +448,77 @@
     .ctx-menu button { text-transform: none; letter-spacing: .02em; }
     .ctx-menu button:hover { background: var(--accent-soft); }
 
+    /* ---- BVH / IK animation editor timeline (shown in body.bvh-mode) ---- */
+    #timeline {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 22;
+      display: none; align-items: center; gap: 7px; flex-wrap: wrap;
+      padding: 10px 14px; box-sizing: border-box;
+      background: linear-gradient(180deg, rgba(11,18,28,.92), rgba(5,9,14,.96));
+      border-top: 1px solid var(--line);
+      backdrop-filter: blur(7px) saturate(115%); -webkit-backdrop-filter: blur(7px) saturate(115%);
+      box-shadow: 0 -10px 30px rgba(0,0,0,.45);
+      font-family: var(--sans); color: var(--text);
+    }
+    body.bvh-mode #timeline { display: flex; }
+    body.bvh-mode #hud { display: none; }
+    #timeline button {
+      font: 600 11px var(--sans); letter-spacing: .07em; text-transform: uppercase;
+      color: var(--text); background: rgba(18,28,40,.55);
+      border: 1px solid var(--line); border-radius: 2px;
+      padding: 6px 10px; cursor: pointer; white-space: nowrap;
+      transition: color .14s ease, border-color .14s ease, background .14s ease, box-shadow .14s ease;
+    }
+    #timeline button:hover { color: var(--bright); border-color: var(--line-2); background: rgba(30,48,68,.7); box-shadow: 0 0 0 1px rgba(124,178,221,.08); }
+    #timeline button:disabled { opacity: .35; pointer-events: none; }
+    #timeline button.active {
+      color: var(--accent-2); border-color: var(--accent); background: var(--accent-soft);
+      box-shadow: 0 0 14px rgba(124,178,221,.22), inset 0 0 14px rgba(124,178,221,.07);
+    }
+    #tl-play { width: 38px; }
+    #tl-track {
+      position: relative; flex: 1 1 160px; height: 30px; min-width: 120px;
+      background: rgba(6,11,18,.7); border: 1px solid var(--line); border-radius: 2px;
+      cursor: pointer; touch-action: none;
+    }
+    #tl-ruler {
+      position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none;
+      background-image: repeating-linear-gradient(to right,
+        transparent 0, transparent calc(10% - 1px), var(--line) calc(10% - 1px), var(--line) 10%);
+      opacity: .7;
+    }
+    #tl-playhead {
+      position: absolute; top: 0; bottom: 0; left: 0; width: 2px; margin-left: -1px;
+      background: var(--accent); box-shadow: 0 0 6px var(--accent);
+      pointer-events: none; z-index: 3;
+    }
+    .tl-key {
+      position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
+      background: #e0af68; border-radius: 2px; transform: rotate(45deg);
+      cursor: grab; z-index: 2; transition: background .1s, box-shadow .1s;
+    }
+    .tl-key:hover { background: #ffd591; box-shadow: 0 0 0 3px rgba(224,175,104,.25); }
+    #tl-time { flex: 0 0 auto; font: 10px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; min-width: 92px; text-align: center; letter-spacing: .06em; }
+    #tl-selected { flex: 0 0 auto; font: 600 11px var(--mono); color: var(--accent-2); white-space: nowrap; min-width: 120px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; letter-spacing: .04em; }
+    #tl-selected.tl-sel-none { color: var(--dim); font-weight: 400; }
+    #timeline label { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; font: 10px var(--mono); color: var(--dim); white-space: nowrap; letter-spacing: .08em; text-transform: uppercase; }
+    #timeline label input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+    #tl-duration { width: 46px; background: rgba(6,11,18,.7); border: 1px solid var(--line); color: var(--accent-2); border-radius: 2px; padding: 4px; font: 11px var(--mono); }
+    .tl-sep { width: 1px; height: 22px; background: var(--line); flex: 0 0 auto; }
+
+    /* ---- status chip (animation editor readout) ---- */
+    #status {
+      position: fixed; right: 14px; bottom: 12px; z-index: 23;
+      font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
+      background: linear-gradient(155deg, rgba(13,21,32,.93), rgba(6,10,16,.95));
+      border: 1px solid var(--line); border-radius: 2px;
+      padding: 6px 12px; max-width: 50vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+      opacity: 0; pointer-events: none; transition: opacity .25s ease, bottom .2s ease;
+    }
+    #status:not(:empty) { opacity: 1; }
+    body.bvh-mode #status { bottom: 72px; }
+
     /* ================= in-world chrome ================= */
     #topbar {
       position: fixed; inset: 0 0 auto 0; height: 34px; z-index: 15; pointer-events: none;
@@ -894,6 +965,38 @@
     </div>
   </div>
 
+  <!-- BVH / IK animation editor timeline (shown only in body.bvh-mode) -->
+  <div id="timeline" aria-label="Animation editor timeline">
+    <button id="tl-play" type="button" title="Play / pause (Space)">▶</button>
+    <div id="tl-track">
+      <div id="tl-ruler"></div>
+      <div id="tl-keys"></div>
+      <div id="tl-playhead"></div>
+    </div>
+    <span id="tl-time">0.00 / 4.0s</span>
+    <div class="tl-sep"></div>
+    <span id="tl-selected" title="What the gizmo is currently controlling">Nothing selected</span>
+    <div class="tl-sep"></div>
+    <button id="tl-key" type="button" title="Add / update keyframe at the playhead (all bones)">⏺ Key</button>
+    <button id="tl-keymoved" type="button" title="Keyframe only the bones moved from rest (sparse)">⏺ Key moved</button>
+    <button id="tl-delkey" type="button" title="Delete the keyframe at the playhead (Del)">Delete</button>
+    <button id="tl-undo" type="button" title="Undo (Ctrl+Z)" disabled>↺</button>
+    <button id="tl-redo" type="button" title="Redo (Ctrl+Shift+Z)" disabled>↻</button>
+    <div class="tl-sep"></div>
+    <button id="tl-gizmo-rot" type="button" class="active" title="Rotate: turn a joint, or aim the selected IK hand/foot">Rotate</button>
+    <button id="tl-gizmo-move" type="button" title="Move: reposition the hip, or IK-place a wrist/ankle">Move</button>
+    <label title="IK on: green markers place the hand/foot; orange poles aim the elbow/knee"><input type="checkbox" id="tl-ik" checked /> IK</label>
+    <label title="Keep joint rotations within anatomically safe ranges"><input type="checkbox" id="tl-limits" checked /> Limits</label>
+    <button id="tl-pin" type="button" title="Pin the selected hand/foot in place — it stays planted when you move the hip">📌 Pin</button>
+    <button id="tl-head" type="button" title="Head aim — drag a target the neck + head turn to face">👁 Head</button>
+    <label title="Animation length in seconds">Length <input id="tl-duration" type="number" min="0.5" max="60" step="0.5" value="4" />s</label>
+    <div class="tl-sep"></div>
+    <button id="tl-save" type="button" title="Download as .bvh">💾 Save BVH</button>
+    <button id="tl-exit" type="button" title="Leave the animation editor">Exit</button>
+  </div>
+
+  <div id="status"></div>
+
   <!-- boot / login screen -->
   <div id="boot">
     <div class="boot-strip top">
@@ -990,6 +1093,7 @@
     import { WorldEditor } from './worldEditor.js';
     import { TerrainEditor } from './terrainEditor.js';
     import { AvatarEditor } from './avatarEditor.js';
+    import { AnimEditor } from './animEditor.js';
     import { SkyEditor } from './skyEditor.js';
     import { CelestialBodies } from 'metaverse-celestial';
     import { MultiplayerManager } from './multiplayer.js';
@@ -1379,7 +1483,14 @@
     bindPBREnvironment(avatar.group);
 
     // Fast procedural 2.5D sky-volume cloud layer.
-    const clouds = new CloudSkyLayer({ scene, camera, sky, windDirection: worldWind.directionDeg, windSpeed: worldWind.speed });
+    const clouds = new CloudSkyLayer({
+      scene,
+      camera,
+      sky,
+      windDirection: worldWind.directionDeg,
+      windSpeed: worldWind.speed,
+      sharpness: 1,
+    });
     clouds.init();
     const precipitation = new Precipitation({
       scene,
@@ -1420,10 +1531,33 @@
     // Avatar customization (shape sliders + textures/materials, two tabs).
     const avatarEditor = new AvatarEditor({ avatar, player });
 
+    // BVH / IK animation authoring (right-click avatar → “Create animation…”).
+    // Entering it freezes the avatar in a still pose via player.enterPose();
+    // onExit resumes locomotion so the Exit button / programmatic exits hand
+    // control back to the player controller. The status chip is a thin proxy
+    // that cancels any pending auto-clear when a new message arrives, so the
+    // editor’s “left editor” line fades out a few seconds after exit instead of
+    // lingering in the corner forever.
+    const statusEl = document.getElementById('status');
+    let statusClearTimer = null;
+    const statusChip = {
+      get textContent() { return statusEl.textContent; },
+      set textContent(v) { clearTimeout(statusClearTimer); statusEl.textContent = v; },
+    };
+    const animEditor = new AnimEditor({
+      avatar, scene, camera, renderer, orbit: controls,
+      status: statusChip,
+      onExit: () => {
+        player.exitPose();
+        clearTimeout(statusClearTimer);
+        statusClearTimer = setTimeout(() => { statusEl.textContent = ''; }, 3000);
+      },
+    });
+
     // Right-click world editing: blocks, terrain, avatar, or sky.
     const editor = new WorldEditor({
       renderer, scene, camera, controls, terrain, blocks, avatar,
-      terrainEditor, avatarEditor, skyEditor,
+      terrainEditor, avatarEditor, skyEditor, animEditor,
     });
 
     // WebRTC multiplayer — copy-paste connection strings, Google STUN.
@@ -1485,6 +1619,7 @@
       const ndc = new THREE.Vector2();
       renderer.domElement.addEventListener('pointerdown', (e) => {
         if (e.button !== 0 || !e.altKey) return;
+        if (animEditor?.active) return; // animation editor owns the camera while active
         ndc.x = (e.clientX / innerWidth) * 2 - 1;
         ndc.y = -(e.clientY / innerHeight) * 2 + 1;
         ray.setFromCamera(ndc, camera);
@@ -1504,6 +1639,9 @@
         e.stopPropagation();
         return;
       }
+      // The animation editor owns Escape while active (deselects the current
+      // marker); leave its framed camera alone and let its own handler run.
+      if (animEditor?.active) return;
       // No dialog/focus to dismiss: snap the chase camera back behind the avatar
       // at the normal distance (undo a zoom-out).
       if (!player.clearFocus()) player.recenterBehind();
@@ -1571,6 +1709,7 @@
       syncEnvironmentLighting();
       avatar.update(dt);                 // pose, physics, blink, look-at
       player.update(dt);                 // movement, grounding, chase camera
+      animEditor.update(dt);             // BVH/IK animation editor (no-op unless active)
       multiplayer.update(dt);            // broadcast local pose to peers
       multiplayer.tickRemotes(dt);       // interpolate remote avatars
       worldIO.tickAgents(dt);            // imported agent avatars
@@ -1583,7 +1722,7 @@
       else renderer.render(scene, camera);
     });
 
-    window.__dbg = { player, avatar, avatarEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, renderer, dofPass, worldWind, worldSunDirection }; // TEMP debug handle
+    window.__dbg = { player, avatar, avatarEditor, animEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, renderer, dofPass, worldWind, worldSunDirection }; // TEMP debug handle
     // Everything is up — let the boot screen enable its ENTER button.
     window.__bootReady?.();
   </script>

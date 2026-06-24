@@ -39,7 +39,7 @@ const HIGHLIGHT = 0x335577;
 // (see constructor) so that the X/Y/Z keyboard locks match the Z-up gizmo.
 
 export class WorldEditor {
-  constructor({ renderer, scene, camera, controls, terrain, blocks, avatar, terrainEditor, avatarEditor, skyEditor }) {
+  constructor({ renderer, scene, camera, controls, terrain, blocks, avatar, terrainEditor, avatarEditor, skyEditor, animEditor }) {
     this.dom = renderer.domElement;
     this.scene = scene;
     this.camera = camera;
@@ -50,6 +50,7 @@ export class WorldEditor {
     this.terrainEditor = terrainEditor;
     this.avatarEditor = avatarEditor;
     this.skyEditor = skyEditor;
+    this.animEditor = animEditor;
 
     this.selection = [];          // currently edited blocks
     this._active = null;          // the "active" block (last clicked) — the parent for Ctrl+P
@@ -242,6 +243,7 @@ export class WorldEditor {
     e.preventDefault();
     if (this._modal) { this._cancelModal(); return; }   // right-click cancels a modal transform
     if (this.terrainEditor?.active) return;             // sculpting owns the pointer
+    if (this.animEditor?.active) return;                // animation editor owns the pointer
     const hit = this._pick(e.clientX, e.clientY);
     if (!hit) {
       this._showMenu(e.clientX, e.clientY, [
@@ -252,6 +254,7 @@ export class WorldEditor {
     if (hit.type === 'avatar') {
       this._showMenu(e.clientX, e.clientY, [
         { label: 'Edit avatar…', action: () => this._openAvatarEditor() },
+        { label: 'Create animation…', action: () => this._openAnimEditor() },
       ]);
     } else if (hit.type === 'terrain') {
       const point = hit.point.clone();
@@ -307,11 +310,24 @@ export class WorldEditor {
     if (isPanelOpen(this.menu) && !this.menu.contains(e.target)) this._hideMenu();
   }
 
-  _openTerrainEditor() { this._deselect(); this._hideMenu(); this.avatarEditor?.close(); this.skyEditor?.close(); this.terrainEditor?.open(); }
-  _openAvatarEditor() { this._deselect(); this._hideMenu(); this.terrainEditor?.close(); this.skyEditor?.close(); this.avatarEditor?.open(); }
-  _openSkyEditor() { this._deselect(); this._hideMenu(); this.terrainEditor?.close(); this.avatarEditor?.close(); this.skyEditor?.open(); }
+  _openTerrainEditor() { this._deselect(); this._hideMenu(); this.avatarEditor?.close(); this.skyEditor?.close(); this.animEditor?.exit(); this.terrainEditor?.open(); }
+  _openAvatarEditor() { this._deselect(); this._hideMenu(); this.terrainEditor?.close(); this.skyEditor?.close(); this.animEditor?.exit(); this.avatarEditor?.open(); }
+  _openSkyEditor() { this._deselect(); this._hideMenu(); this.terrainEditor?.close(); this.avatarEditor?.close(); this.animEditor?.exit(); this.skyEditor?.open(); }
+  _openAnimEditor() {
+    this._deselect(); this._hideMenu();
+    this.terrainEditor?.close(); this.avatarEditor?.close(); this.skyEditor?.close();
+    // Freeze the avatar in a still T-pose and frame the camera on it, then hand
+    // control to the BVH/IK animation editor (markers, timeline, gizmo).
+    this.blocks.player?.enterPose();
+    this.animEditor?.enter();
+  }
 
   _onKey(e) {
+    // The animation editor owns the keyboard while active (Space, Del,
+    // Ctrl+Z, Escape to deselect). Bail before the Escape branch below, which
+    // would close the avatar editor and resume the player out from under it.
+    if (this.animEditor?.active) return;
+
     // ---- while a gizmo drag is in progress, Escape cancels (reverts) it ----
     // Left-click release already commits (TransformControls default); Escape
     // is the cancel path. `reset()` reverts the pivot to its drag-start

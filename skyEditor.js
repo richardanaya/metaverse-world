@@ -9,6 +9,8 @@ import * as THREE from 'three';
 import { DEFAULT_CLOUD_SETTINGS } from 'metaverse-sky';
 import { showPanel, hidePanel } from './panelFade.js';
 
+const APP_CLOUD_DEFAULTS = { ...DEFAULT_CLOUD_SETTINGS, sharpness: 1 };
+
 const PHASE_NAMES = [
   'New', 'Waxing Crescent', 'First Quarter', 'Waxing Gibbous',
   'Full', 'Waning Gibbous', 'Last Quarter', 'Waning Crescent', 'New',
@@ -252,7 +254,7 @@ export class SkyEditor {
 
   _resetClouds() {
     if (!this.clouds) return;
-    const d = DEFAULT_CLOUD_SETTINGS;
+    const d = APP_CLOUD_DEFAULTS;
     this.clouds.applyAtmosphereSettings({
       cloudsEnabled: this.clouds.params.enabled,
       cloudOpacity: d.opacity,
