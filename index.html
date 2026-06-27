@@ -1648,6 +1648,9 @@
         ndc.x = (e.clientX / innerWidth) * 2 - 1;
         ndc.y = -(e.clientY / innerHeight) * 2 + 1;
         ray.setFromCamera(ndc, camera);
+        // Let WorldEditor try imported GLB/GLTF proxies/meshes first.
+        const editorFocus = editor.pickFocusPoint?.(e.clientX, e.clientY);
+        if (editorFocus) { player.setFocusPoint(editorFocus); return; }
         // recursive: the avatar is a rig of skinned meshes under one group.
         const hit = ray.intersectObjects([terrain.terrainMesh, avatar.group, ...blocks.meshes()], true)[0];
         if (hit) player.setFocusPoint(hit.point);

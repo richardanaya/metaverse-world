@@ -31,6 +31,7 @@
 
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { showPanel, hidePanel, isPanelOpen } from './panelFade.js';
 import { BLOCK_PBR_CHANNELS, BLOCK_FACE_NAMES } from './blocks.js';
 
@@ -65,8 +66,9 @@ export class WorldEditor {
     this.skyEditor = skyEditor;
     this.animEditor = animEditor;
 
-    this.selection = [];          // currently edited blocks
-    this._active = null;          // the "active" block (last clicked) — the parent for Ctrl+P
+    this.selection = [];          // currently edited objects (blocks or imported models)
+    this.importedObjects = [];    // { mesh: Group, isImported, name }
+    this._active = null;          // the "active" object (last clicked) — the parent for Ctrl+P
     this._targets = [];           // blocks whose physics must resync (selection + descendants)
     this._emissive = new Map();   // block -> original emissive hex (to restore highlight)
     this._baseMode = 'translate'; // gizmo mode chosen via the pane
@@ -103,6 +105,13 @@ export class WorldEditor {
     this._file.accept = 'image/*';
     this._file.style.display = 'none';
     document.body.appendChild(this._file);
+
+    this._modelFile = document.createElement('input');
+    this._modelFile.type = 'file';
+    this._modelFile.accept = '.glb,.gltf,model/gltf-binary,model/gltf+json';
+    this._modelFile.style.display = 'none';
+    document.body.appendChild(this._modelFile);
+    this._gltfLoader = new GLTFLoader();
 
     // scratch
     this._v = new THREE.Vector3();
@@ -254,6 +263,43 @@ export class WorldEditor {
       return { type: 'block', block: this.blocks.findByMesh(blockHit.object), point: blockHit.point, normal, materialIndex: blockHit.face?.materialIndex ?? 0 };
     }
 
+    // For imported models, try exact mesh hits before the broad edit proxy so
+    // Select Material mode can identify the clicked mesh/material slot.
+    for (const obj of this.importedObjects) obj.mesh.updateWorldMatrix(true, true);
+    const importedHit = this.raycaster.intersectObjects(this.importedObjects.map((o) => o.mesh), true)[0];
+    if (importedHit) {
+      const obj = this._findImportedByChild(importedHit.object);
+      const normal = importedHit.face
+        ? importedHit.face.normal.clone().transformDirection(importedHit.object.matrixWorld).normalize()
+        : new THREE.Vector3(0, 1, 0);
+      return { type: 'imported', block: obj, point: importedHit.point, normal, materialIndex: importedHit.face?.materialIndex ?? 0, mesh: importedHit.object };
+    }
+
+    for (const obj of this.importedObjects) this._updateImportedProxy(obj);
+    const proxyHit = this.raycaster.intersectObjects(this.importedObjects.map((o) => o.proxy).filter(Boolean), false)[0];
+    if (proxyHit) {
+      const obj = proxyHit.object.userData.importedEditable;
+      const mesh = this._firstImportedMesh(obj);
+      return { type: 'imported', block: obj, point: proxyHit.point, normal: new THREE.Vector3(0, 1, 0), materialIndex: 0, mesh };
+    }
+
+    // Some imported GLB/GLTF assets have unusual nested/skinned/generated geometry
+    // that can miss mesh-level raycasts. Fall back to their world bounding boxes
+    // before testing terrain, so clicks on the model don't pass through to ground.
+    let boxHit = null;
+    for (const obj of this.importedObjects) {
+      const box = new THREE.Box3().setFromObject(obj.mesh);
+      if (box.isEmpty()) continue;
+      const point = this.raycaster.ray.intersectBox(box, new THREE.Vector3());
+      if (!point) continue;
+      const dist = point.distanceTo(this.raycaster.ray.origin);
+      if (!boxHit || dist < boxHit.dist) boxHit = { obj, point, dist };
+    }
+    if (boxHit) return { type: 'imported', block: boxHit.obj, point: boxHit.point, normal: new THREE.Vector3(0, 1, 0), materialIndex: 0, mesh: this._firstImportedMesh(boxHit.obj) };
+
+    const screenHit = this._pickImportedByScreen(clientX, clientY);
+    if (screenHit) return screenHit;
+
     if (this.avatar && this.raycaster.intersectObject(this.avatar.group, true).length) {
       return { type: 'avatar' };
     }
@@ -286,17 +332,21 @@ export class WorldEditor {
       const point = hit.point.clone();
       this._showMenu(e.clientX, e.clientY, [
         { label: '+ Add block here', action: () => this._edit(this.blocks.addAt(point)) },
+        { label: '+ Add GLB/GLTF here', action: () => this._pickAndAddModel(point) },
         { label: 'Edit terrain', action: () => this._openTerrainEditor() },
       ]);
     } else {
       const block = hit.block;
       const point = hit.point.clone();
       const normal = hit.normal.clone();
-      this._showMenu(e.clientX, e.clientY, [
-        { label: '+ New block', action: () => this._edit(this._addAgainst(point, normal)) },
+      const items = [];
+      if (hit.type === 'block') items.push({ label: '+ New block', action: () => this._edit(this._addAgainst(point, normal)) });
+      items.push(
+        { label: '+ Add GLB/GLTF here', action: () => this._pickAndAddModel(point) },
         { label: 'Edit', action: () => this._edit(block) },
         { label: 'Delete', action: () => this._delete(block), cls: 'danger' },
-      ]);
+      );
+      this._showMenu(e.clientX, e.clientY, items);
     }
   }
 
@@ -319,10 +369,11 @@ export class WorldEditor {
     if (moved > CLICK_SLOP) return; // it was an orbit drag, not a click
 
     const hit = this._pick(e.clientX, e.clientY);
-    if (hit?.type === 'block') {
+    if (hit?.type === 'block' || hit?.type === 'imported') {
+      if (e.altKey) { this._focusOrbitOn(hit.block); return; }
       if (this.selection.length) {
         if (this._materialSelectMode) {
-          this._selectMaterial(hit.block, hit.materialIndex, e.shiftKey);
+          this._selectMaterial(hit.block, hit.materialIndex, e.shiftKey, hit.mesh);
         } else {
           // Already editing: click selects directly; Shift toggles in/out.
           if (e.shiftKey) this._toggleInSelection(hit.block);
@@ -338,6 +389,117 @@ export class WorldEditor {
 
   _onWindowPointerDown(e) {
     if (isPanelOpen(this.menu) && !this.menu.contains(e.target)) this._hideMenu();
+  }
+
+  pickFocusPoint(clientX, clientY) {
+    const hit = this._pick(clientX, clientY);
+    if (hit?.type === 'block') return hit.point?.clone?.() ?? hit.block.mesh.getWorldPosition(new THREE.Vector3());
+    if (hit?.type === 'imported') {
+      const box = new THREE.Box3().setFromObject(hit.block.mesh);
+      return box.isEmpty() ? hit.block.mesh.getWorldPosition(new THREE.Vector3()) : box.getCenter(new THREE.Vector3());
+    }
+    return null;
+  }
+
+  _focusOrbitOn(obj) {
+    if (!this.orbit?.target || !obj?.mesh) return;
+    const box = new THREE.Box3().setFromObject(obj.mesh);
+    const center = box.isEmpty() ? obj.mesh.getWorldPosition(this._v) : box.getCenter(this._v);
+    this.blocks.player?.setFocusPoint?.(center);
+    this.orbit.target.copy(center);
+    this.orbit.update?.();
+  }
+
+  _pickImportedByScreen(clientX, clientY) {
+    const rect = this.dom.getBoundingClientRect();
+    let best = null;
+    for (const obj of this.importedObjects) {
+      const box = new THREE.Box3().setFromObject(obj.mesh);
+      if (box.isEmpty()) continue;
+      const pts = [
+        new THREE.Vector3(box.min.x, box.min.y, box.min.z), new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+        new THREE.Vector3(box.min.x, box.max.y, box.min.z), new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+        new THREE.Vector3(box.max.x, box.min.y, box.min.z), new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+        new THREE.Vector3(box.max.x, box.max.y, box.min.z), new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+      ].map((p) => p.project(this.camera));
+      const xs = pts.map((p) => rect.left + (p.x * 0.5 + 0.5) * rect.width);
+      const ys = pts.map((p) => rect.top + (-p.y * 0.5 + 0.5) * rect.height);
+      const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+      if (clientX < minX || clientX > maxX || clientY < minY || clientY > maxY) continue;
+      const center = box.getCenter(new THREE.Vector3());
+      const dist = center.distanceTo(this.camera.position);
+      if (!best || dist < best.dist) best = { obj, point: center, dist };
+    }
+    return best ? { type: 'imported', block: best.obj, point: best.point, normal: new THREE.Vector3(0, 1, 0), materialIndex: 0 } : null;
+  }
+
+  _findImportedByChild(child) {
+    return this.importedObjects.find((obj) => {
+      for (let o = child; o; o = o.parent) if (o === obj.mesh || o === obj.proxy) return true;
+      return false;
+    }) ?? null;
+  }
+
+  _firstImportedMesh(obj) {
+    let found = null;
+    obj?.mesh?.traverse((c) => { if (!found && c.isMesh && c.material) found = c; });
+    return found;
+  }
+
+  _updateImportedProxy(obj) {
+    if (!obj?.mesh) return;
+    obj.mesh.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(obj.mesh);
+    if (box.isEmpty()) return;
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    if (!obj.proxy) {
+      const geo = new THREE.BoxGeometry(1, 1, 1);
+      const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+      obj.proxy = new THREE.Mesh(geo, mat);
+      obj.proxy.name = `${obj.name || 'Imported'} pick proxy`;
+      obj.proxy.userData.importedEditable = obj;
+      this.scene.add(obj.proxy);
+    }
+    obj.proxy.position.copy(center);
+    obj.proxy.quaternion.identity();
+    obj.proxy.scale.copy(size);
+    obj.proxy.updateMatrixWorld(true);
+  }
+
+  _pickAndAddModel(point) {
+    this._modelFile.value = '';
+    this._modelFile.onchange = () => {
+      const file = this._modelFile.files?.[0];
+      if (file) this._addModelAt(file, point);
+    };
+    this._modelFile.click();
+  }
+
+  _addModelAt(file, point) {
+    const url = URL.createObjectURL(file);
+    this._gltfLoader.load(url, (gltf) => {
+      const obj = gltf.scene;
+      obj.name = file.name.replace(/\.(glb|gltf)$/i, '') || 'Imported model';
+      obj.position.copy(point);
+      obj.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          // Seed future per-object/per-material override state without changing imported materials yet.
+          child.userData.materialState ??= { kind: 'imported-mesh', source: file.name, overrides: [] };
+        }
+      });
+      const editable = { mesh: obj, isImported: true, name: obj.name, proxy: null };
+      obj.userData.block = editable; // lets existing edit code treat it block-like
+      this.importedObjects.push(editable);
+      this.scene.add(obj);
+      this._updateImportedProxy(editable);
+      URL.revokeObjectURL(url);
+    }, undefined, (err) => {
+      console.error('Failed to import GLB/GLTF', err);
+      URL.revokeObjectURL(url);
+    });
   }
 
   _openTerrainEditor() { this._deselect(); this._hideMenu(); this.avatarEditor?.close(); this.skyEditor?.close(); this.animEditor?.exit(); this.terrainEditor?.open(); }
@@ -473,7 +635,7 @@ export class WorldEditor {
     const ordered = this.selection.slice().sort((a, b) => this._depth(a) - this._depth(b));
     for (const b of ordered) {
       this._highlightOff(b);
-      (b.parent ? b.parent.mesh : this._blocksRoot).attach(b.mesh);
+      (b.parent ? b.parent.mesh : (b.isImported ? this.scene : this._blocksRoot)).attach(b.mesh);
     }
     this.selection = [];
   }
@@ -500,19 +662,21 @@ export class WorldEditor {
     this._targets = [...set];
   }
 
+  _syncEditable(obj) { if (obj?.isImported) this._updateImportedProxy(obj); else this.blocks.syncPhysics(obj); }
+
   // Make `child` a real scene-graph child of `parent`, keeping world transform.
   _setParent(child, parent) {
     child.parent = parent;
     parent.mesh.attach(child.mesh);
-    this.blocks.syncPhysics(child);
+    this._syncEditable(child);
   }
 
   // Detach `child` to the blocks root, keeping world transform.
   _clearParent(child) {
     if (!child.parent) return;
     child.parent = null;
-    this._blocksRoot.attach(child.mesh);
-    this.blocks.syncPhysics(child);
+    (child.isImported ? this.scene : this._blocksRoot).attach(child.mesh);
+    this._syncEditable(child);
   }
 
   _deselect() {
@@ -528,31 +692,42 @@ export class WorldEditor {
     this._materialSelectMode = false;
   }
 
+  _objectMaterials(obj) {
+    const mats = [];
+    obj.mesh.traverse((c) => {
+      if (!c.material) return;
+      mats.push(...(Array.isArray(c.material) ? c.material : [c.material]));
+    });
+    return mats.filter((m) => m?.emissive);
+  }
+
   _highlightOn(b) {
-    const mats = this.blocks.materialsOf(b.mesh);
-    this._emissive.set(b, mats.map((m) => m.emissive.getHex()));
-    mats.forEach((m) => m.emissive.setHex(HIGHLIGHT));
+    const mats = b.isImported ? this._objectMaterials(b) : this.blocks.materialsOf(b.mesh);
+    this._emissive.set(b, mats.map((m) => m.emissive?.getHex?.() ?? 0));
+    mats.forEach((m) => m.emissive?.setHex?.(HIGHLIGHT));
   }
 
   _highlightOff(b) {
     const hexes = this._emissive.get(b);
-    if (hexes) this.blocks.materialsOf(b.mesh).forEach((m, i) => m.emissive.setHex(hexes[i] ?? 0));
+    const mats = b.isImported ? this._objectMaterials(b) : this.blocks.materialsOf(b.mesh);
+    if (hexes) mats.forEach((m, i) => m.emissive?.setHex?.(hexes[i] ?? 0));
     this._emissive.delete(b);
   }
 
-  _materialKey(block, index) { return `${this.blocks.blocks.indexOf(block)}:${index}`; }
+  _materialKey(block, index, mesh = null) { return `${block.isImported ? this.importedObjects.indexOf(block) : this.blocks.blocks.indexOf(block)}:${mesh?.uuid ?? 'block'}:${index}`; }
 
   _updateMaterialHighlights() {
     this._clearMaterialOutlines();
     for (const b of this.selection) {
       const original = this._emissive.get(b) ?? [];
       // Do not tint/fill selected blocks; selection is shown with outlines only.
-      this.blocks.materialsOf(b.mesh).forEach((m, i) => m.emissive.setHex(original[i] ?? 0));
+      const mats = b.isImported ? this._objectMaterials(b) : this.blocks.materialsOf(b.mesh);
+      mats.forEach((m, i) => m.emissive?.setHex?.(original[i] ?? 0));
     }
     if (!this._suppressMaterialHighlight) {
       const selected = this._selectedMaterials.filter(({ block }) => this.selection.includes(block));
       if (selected.length) {
-        for (const { block, index } of selected) this._addMaterialOutline(block, index);
+        for (const { block, index, mesh } of selected) this._addMaterialOutline(block, index, mesh);
       } else {
         for (const block of this.selection) this._addBlockOutline(block);
       }
@@ -569,6 +744,15 @@ export class WorldEditor {
   }
 
   _addBlockOutline(block) {
+    if (block.isImported) {
+      const helper = new THREE.BoxHelper(block.mesh, MATERIAL_HIGHLIGHT);
+      helper.material.depthTest = false;
+      helper.material.depthWrite = false;
+      helper.renderOrder = 1000;
+      this.scene.add(helper);
+      this._materialOutlines.push(helper);
+      return;
+    }
     const h = this.blocks.size / 2;
     const e = h * 0.025;
     const geo = new THREE.EdgesGeometry(new THREE.BoxGeometry((h + e) * 2, (h + e) * 2, (h + e) * 2));
@@ -580,7 +764,28 @@ export class WorldEditor {
 
   }
 
-  _addMaterialOutline(block, index) {
+  _addMaterialOutline(block, index, mesh = null) {
+    if (block.isImported) {
+      const target = mesh ?? this._firstImportedMesh(block) ?? block.mesh;
+      const helper = new THREE.BoxHelper(target, MATERIAL_HIGHLIGHT);
+      helper.material.depthTest = false;
+      helper.material.depthWrite = false;
+      helper.material.transparent = true;
+      helper.material.opacity = 1;
+      helper.renderOrder = 1000;
+      this.scene.add(helper);
+      this._materialOutlines.push(helper);
+
+      const helper2 = new THREE.BoxHelper(target, 0xffffff);
+      helper2.material.depthTest = false;
+      helper2.material.depthWrite = false;
+      helper2.material.transparent = true;
+      helper2.material.opacity = 0.45;
+      helper2.renderOrder = 1001;
+      this.scene.add(helper2);
+      this._materialOutlines.push(helper2);
+      return;
+    }
     const h = this.blocks.size / 2;
     const e = h * 0.018;
     const p = [
@@ -629,15 +834,16 @@ export class WorldEditor {
     this._setMode(this._materialSelectMode ? 'material' : this._baseMode);
   }
 
-  _selectMaterial(block, index, additive = false) {
+  _selectMaterial(block, index, additive = false, mesh = null) {
     if (!this.selection.includes(block)) return;
-    const key = this._materialKey(block, index);
+    mesh ??= block.isImported ? this._firstImportedMesh(block) : null;
+    const key = this._materialKey(block, index, mesh);
     if (additive) {
-      const i = this._selectedMaterials.findIndex((m) => this._materialKey(m.block, m.index) === key);
+      const i = this._selectedMaterials.findIndex((m) => this._materialKey(m.block, m.index, m.mesh) === key);
       if (i >= 0) this._selectedMaterials.splice(i, 1);
-      else this._selectedMaterials.push({ block, index });
+      else this._selectedMaterials.push({ block, index, mesh });
     } else {
-      this._selectedMaterials = [{ block, index }];
+      this._selectedMaterials = [{ block, index, mesh }];
     }
     this._updateMaterialHighlights();
     this._refreshMaterialPane();
@@ -679,16 +885,33 @@ export class WorldEditor {
 
   _pickFile(onFile) { this._file.value = ''; this._file.onchange = () => { const f = this._file.files[0]; if (f) onFile(f); }; this._file.click(); }
 
-  _targetMaterialSlots() {
-    const selected = this._selectedMaterials.filter((m) => this.selection.includes(m.block));
-    // Face/material overrides only apply while Select Material mode is active.
-    // In normal Move/Rotate/Scale modes, the material editor targets the whole
-    // selected object(s), even if a face selection from earlier still exists.
-    if (this._materialSelectMode && selected.length) return selected;
-    return this.selection.flatMap((block) => this.blocks.materialsOf(block.mesh).map((_, index) => ({ block, index })));
+  _importedMaterialSlots(block) {
+    const slots = [];
+    block.mesh.traverse((mesh) => {
+      if (!mesh.isMesh || !mesh.material) return;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      mats.forEach((_, index) => slots.push({ block, mesh, index }));
+    });
+    return slots;
   }
 
-  _targetMaterials() { return this._targetMaterialSlots().map(({ block, index }) => this.blocks.materialAt(block, index)); }
+  _slotMaterial({ block, mesh, index }) {
+    if (!block.isImported) return this.blocks.materialAt(block, index);
+    const mats = Array.isArray(mesh?.material) ? mesh.material : [mesh?.material];
+    return mats[index] ?? mats[0] ?? null;
+  }
+
+  _targetMaterialSlots() {
+    const selected = this._selectedMaterials.filter((m) => this.selection.includes(m.block));
+    if (this._materialSelectMode && selected.length) return selected;
+    return this.selection.flatMap((block) => (
+      block.isImported
+        ? this._importedMaterialSlots(block)
+        : this.blocks.materialsOf(block.mesh).map((_, index) => ({ block, index }))
+    ));
+  }
+
+  _targetMaterials() { return this._targetMaterialSlots().map((slot) => this._slotMaterial(slot)).filter(Boolean); }
 
   _tintValue() {
     const mat = this._targetMaterials()[0];
@@ -696,9 +919,14 @@ export class WorldEditor {
   }
 
   _setTintValue(value) {
-    for (const { block, index } of this._targetMaterialSlots()) {
-      this.blocks.materialStateFor(block, index).tint = value;
-      this.blocks.applyMaterialState(block, index);
+    for (const slot of this._targetMaterialSlots()) {
+      if (!slot.block.isImported) {
+        this.blocks.materialStateFor(slot.block, slot.index).tint = value;
+        this.blocks.applyMaterialState(slot.block, slot.index);
+      } else {
+        const mat = this._slotMaterial(slot);
+        if (mat?.color) { mat.color.set(value); mat.needsUpdate = true; }
+      }
     }
   }
 
@@ -732,16 +960,35 @@ export class WorldEditor {
   _firstTexture(mat) { return BLOCK_PBR_CHANNELS.map((ch) => mat[ch.key]).find(Boolean); }
 
   _setMaterialValue(key, value) {
-    for (const { block, index } of this._targetMaterialSlots()) {
-      const s = this.blocks.materialStateFor(block, index);
-      if (key === 'normal') s.values.normalIntensity = value;
-      else if (key === 'roughness') s.values.roughness = value;
-      else if (key === 'metalness') s.values.metalness = value;
-      else if (key === 'ao') s.values.aoIntensity = value;
-      else if (key === 'alpha') s.values.alpha = value;
-      else if (key === 'texScaleX') s.values.repeatX = value;
-      else if (key === 'texScaleY') s.values.repeatY = value;
-      this.blocks.applyMaterialState(block, index);
+    for (const slot of this._targetMaterialSlots()) {
+      if (!slot.block.isImported) {
+        const s = this.blocks.materialStateFor(slot.block, slot.index);
+        if (key === 'normal') s.values.normalIntensity = value;
+        else if (key === 'roughness') s.values.roughness = value;
+        else if (key === 'metalness') s.values.metalness = value;
+        else if (key === 'ao') s.values.aoIntensity = value;
+        else if (key === 'alpha') s.values.alpha = value;
+        else if (key === 'texScaleX') s.values.repeatX = value;
+        else if (key === 'texScaleY') s.values.repeatY = value;
+        this.blocks.applyMaterialState(slot.block, slot.index);
+      } else {
+        const mat = this._slotMaterial(slot);
+        if (!mat) continue;
+        if (key === 'normal') mat.normalScale?.set(value, value);
+        else if (key === 'roughness') mat.roughness = value;
+        else if (key === 'metalness') mat.metalness = value;
+        else if (key === 'ao') mat.aoMapIntensity = value;
+        else if (key === 'alpha') { mat.opacity = value; mat.transparent = value < 1; mat.depthWrite = value >= 1; }
+        else if (key === 'texScaleX' || key === 'texScaleY') {
+          for (const ch of BLOCK_PBR_CHANNELS) {
+            const tex = mat[ch.key]; if (!tex) continue;
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            if (key === 'texScaleX') tex.repeat.x = value; else tex.repeat.y = value;
+            tex.needsUpdate = true;
+          }
+        }
+        mat.needsUpdate = true;
+      }
     }
   }
 
@@ -774,6 +1021,22 @@ export class WorldEditor {
     return wrap;
   }
 
+  _setImportedMaterialTexture(slot, ch, img) {
+    const mat = this._slotMaterial(slot);
+    if (!mat) return;
+    const tex = new THREE.CanvasTexture(img);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    const first = this._firstTexture(mat);
+    tex.repeat.copy(first?.repeat ?? new THREE.Vector2(1, 1));
+    if (ch.colorSpace) tex.colorSpace = ch.colorSpace;
+    mat[ch.key] = tex;
+    if (ch.key === 'normalMap') mat.normalScale?.set(1, 1);
+    else if (ch.key === 'roughnessMap') mat.roughness = 1;
+    else if (ch.key === 'metalnessMap') mat.metalness = 1;
+    else if (ch.key === 'aoMap') mat.aoMapIntensity = 1;
+    mat.needsUpdate = true;
+  }
+
   _makeBlockSlot(ch) {
     const b = document.createElement('button');
     b.className = 'avatar-slot block-slot';
@@ -784,7 +1047,10 @@ export class WorldEditor {
     const apply = async (file, targetMats = this._targetMaterialSlots()) => {
       if (!file?.type?.startsWith('image/')) return;
       const { img, url } = await loadImage(file);
-      for (const slot of targetMats) this.blocks.setMaterialTexture(slot.block, slot.index, ch.key, url, img);
+      for (const slot of targetMats) {
+        if (!slot.block.isImported) this.blocks.setMaterialTexture(slot.block, slot.index, ch.key, url, img);
+        else this._setImportedMaterialTexture(slot, ch, img);
+      }
       b.style.backgroundImage = `url(${url})`; b.classList.add('filled');
       this._refreshMaterialPane();
     };
@@ -854,7 +1120,7 @@ export class WorldEditor {
   _onPivotChanged() {
     if (!this.selection.length) return;
     if (this.gizmo.dragging && this.gizmo.getMode() === 'scale' && this._scaleAnchor) this._applyScaleAnchor();
-    for (const b of this._targets) this.blocks.syncPhysics(b);
+    for (const b of this._targets) this._syncEditable(b);
   }
 
   _onGizmoDragStart() {
@@ -1017,7 +1283,7 @@ export class WorldEditor {
       }
     }
     this._pivot.updateMatrixWorld(true);
-    for (const b of this._targets) this.blocks.syncPhysics(b);
+    for (const b of this._targets) this._syncEditable(b);
   }
 
   _confirmModal() { this._endModal(); }
@@ -1029,7 +1295,7 @@ export class WorldEditor {
     this._pivot.quaternion.copy(m.startQuat);
     this._pivot.scale.copy(m.startScale);
     this._pivot.updateMatrixWorld(true);
-    for (const b of this._targets) this.blocks.syncPhysics(b);
+    for (const b of this._targets) this._syncEditable(b);
     this._endModal();
   }
 
@@ -1087,12 +1353,21 @@ export class WorldEditor {
   // they don't disappear with the parent's subtree when it's removed.
   _orphanChildren(block) {
     for (const b of this.blocks.blocks) {
-      if (b.parent === block) { b.parent = null; this._blocksRoot.attach(b.mesh); this.blocks.syncPhysics(b); }
+      if (b.parent === block) { b.parent = null; this._blocksRoot.attach(b.mesh); this._syncEditable(b); }
     }
   }
 
   _remove(block) {
     this._orphanChildren(block);
+    if (block.isImported) {
+      const i = this.importedObjects.indexOf(block);
+      if (i >= 0) this.importedObjects.splice(i, 1);
+      block.mesh.parent?.remove(block.mesh);
+      block.proxy?.parent?.remove(block.proxy);
+      block.proxy?.geometry?.dispose?.();
+      block.proxy?.material?.dispose?.();
+      return;
+    }
     this.blocks.remove(block);
   }
 
