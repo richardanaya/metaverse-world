@@ -1078,7 +1078,7 @@
 
   <script type="module">
     import * as THREE from 'three/webgpu';
-    import { pass, uniform } from 'three/tsl';
+    import { color, exp, fog, oneMinus, pass, positionView, saturate, uniform } from 'three/tsl';
     import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
@@ -1221,7 +1221,15 @@
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x9fb7d5);
-    scene.fog = new THREE.Fog(0x9fb7d5, 300, 700);
+
+    // Beer-Lambert fog: light transmittance decays exponentially through air,
+    // T(d) = e^(-sigma * d). The fog blend is 1 - T(d), using view-space Z as
+    // the camera-ray distance proxy so it works in both plain and post renders.
+    const beerFogColor = color(0x9fb7d5);
+    const beerFogDensity = uniform(0.011); // extinction coefficient per world unit
+    const beerFogFactor = saturate(oneMinus(exp(positionView.z.mul(beerFogDensity))));
+    scene.fog = null;
+    scene.fogNode = fog(beerFogColor, beerFogFactor);
 
     const HDRI_URL = 'https://threejs.org/examples/textures/equirectangular/monochrome_studio_02_1k.hdr';
     const ELEVATION_MIN = -20;
@@ -1392,9 +1400,16 @@
     // Stars are additive transparent sprites in the celestial package. Force depth
     // testing so terrain/avatar depth occludes them instead of letting them draw on top.
     if (celestialBodies.stars) celestialBodies.stars.renderOrder = -100;
+    // Keep local Beer-Lambert fog on the atmospheric sky, but don't attenuate
+    // the separate celestial dome/star sprites (moon, planets, Milky Way, stars).
+    if (celestialBodies.material) {
+      celestialBodies.material.fog = false;
+      celestialBodies.material.needsUpdate = true;
+    }
     if (celestialBodies.starMaterial) {
       celestialBodies.starMaterial.depthTest = true;
       celestialBodies.starMaterial.depthWrite = false;
+      celestialBodies.starMaterial.fog = false;
       celestialBodies.starMaterial.needsUpdate = true;
     }
     celestialBodies.setStars({ starSize: 0.25 });
@@ -1722,7 +1737,7 @@
       else renderer.render(scene, camera);
     });
 
-    window.__dbg = { player, avatar, avatarEditor, animEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, renderer, dofPass, worldWind, worldSunDirection }; // TEMP debug handle
+    window.__dbg = { player, avatar, avatarEditor, animEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, renderer, dofPass, beerFogDensity, worldWind, worldSunDirection }; // TEMP debug handle
     // Everything is up — let the boot screen enable its ENTER button.
     window.__bootReady?.();
   </script>
