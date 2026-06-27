@@ -12,6 +12,8 @@
 // The shape + material model comes straight from the metaverse-avatar studio
 // example (SLIDERS / SEX_PRESETS / PBR_CHANNELS, applyShape, setSkinMap, …).
 
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { SLIDERS, SEX_PRESETS, PBR_CHANNELS } from 'metaverse-avatar';
 import { showPanel, hidePanel } from './panelFade.js';
 
@@ -48,6 +50,9 @@ export class AvatarEditor {
     this.active = false;
     this.sliderState = {};   // id -> t (-1.5..1.5)
     this._inputs = new Map(); // id -> range input (for preset / reset sync)
+    this._gltfLoader = new GLTFLoader();
+    this._pendingAttachment = null; // { file, object, name }
+    this._attachments = [];
 
     // One shared hidden file input, re-targeted per upload.
     this._file = document.createElement('input');
@@ -55,6 +60,12 @@ export class AvatarEditor {
     this._file.accept = 'image/*';
     this._file.style.display = 'none';
     document.body.appendChild(this._file);
+
+    this._attachFile = document.createElement('input');
+    this._attachFile.type = 'file';
+    this._attachFile.accept = '.glb,.gltf,model/gltf-binary,model/gltf+json';
+    this._attachFile.style.display = 'none';
+    document.body.appendChild(this._attachFile);
 
     this._build();
   }
@@ -87,14 +98,19 @@ export class AvatarEditor {
     this._lookPane = document.createElement('div');
     this._lookPane.className = 'avatar-pane';
     this._lookPane.style.display = 'none';
+    this._attachPane = document.createElement('div');
+    this._attachPane.className = 'avatar-pane';
+    this._attachPane.style.display = 'none';
     const shapeTab = this._tabButton('Shape', tabs, this._shapePane);
     this._tabButton('Appearance', tabs, this._lookPane);
+    this._tabButton('Attachments', tabs, this._attachPane);
     shapeTab.classList.add('active');
     this.panel.appendChild(tabs);
 
     this._buildShape(this._shapePane);
     this._buildAppearance(this._lookPane);
-    this.panel.append(this._shapePane, this._lookPane);
+    this._buildAttachments(this._attachPane);
+    this.panel.append(this._shapePane, this._lookPane, this._attachPane);
 
     const done = document.createElement('button');
     done.className = 'avatar-done';
@@ -113,6 +129,7 @@ export class AvatarEditor {
       b.classList.add('active');
       this._shapePane.style.display = pane === this._shapePane ? 'flex' : 'none';
       this._lookPane.style.display = pane === this._lookPane ? 'flex' : 'none';
+      this._attachPane.style.display = pane === this._attachPane ? 'flex' : 'none';
     });
     tabs.appendChild(b);
     return b;
@@ -195,6 +212,206 @@ export class AvatarEditor {
     this.sliderState = {};
     for (const { input, val } of this._inputs.values()) { input.value = 0; val.textContent = '0'; }
     this.avatar.applyShape(this.sliderState);
+  }
+
+  // ---- Attachments tab -----------------------------------------------
+  _buildAttachments(pane) {
+    const hint = document.createElement('div');
+    hint.className = 'avatar-hint';
+    hint.textContent = 'Drop a GLB/GLTF here, choose a bone, then Attach.';
+    pane.appendChild(hint);
+
+    this._attachSlot = document.createElement('button');
+    this._attachSlot.className = 'avatar-attach-slot';
+    this._attachSlot.textContent = 'Drop GLB/GLTF or click to browse';
+    pane.appendChild(this._attachSlot);
+
+    this._boneSelect = document.createElement('select');
+    this._boneSelect.className = 'avatar-attach-bone';
+    pane.appendChild(this._boneSelect);
+    this._refreshBoneOptions();
+
+    const attach = document.createElement('button');
+    attach.textContent = 'Attach';
+    attach.addEventListener('click', () => this._attachPending());
+    pane.appendChild(attach);
+
+    this._attachList = document.createElement('div');
+    this._attachList.className = 'avatar-attach-list';
+    pane.appendChild(this._attachList);
+    this._refreshAttachmentList();
+
+    const pick = () => {
+      this._attachFile.value = '';
+      this._attachFile.onchange = () => { const f = this._attachFile.files?.[0]; if (f) this._loadAttachmentFile(f); };
+      this._attachFile.click();
+    };
+    this._attachSlot.addEventListener('click', pick);
+    this._attachSlot.addEventListener('dragover', (e) => { e.preventDefault(); this._attachSlot.classList.add('drop'); });
+    this._attachSlot.addEventListener('dragleave', () => this._attachSlot.classList.remove('drop'));
+    this._attachSlot.addEventListener('drop', (e) => {
+      e.preventDefault();
+      this._attachSlot.classList.remove('drop');
+      const f = e.dataTransfer?.files?.[0];
+      if (f) this._loadAttachmentFile(f);
+    });
+  }
+
+  _avatarBones() {
+    const seen = new Set();
+    const bones = [];
+    const add = (b) => {
+      if (!b?.isBone || seen.has(b.uuid)) return;
+      seen.add(b.uuid);
+      bones.push(b);
+    };
+    // Some avatar implementations keep bones under the visible group; others
+    // expose them only through SkinnedMesh.skeleton.bones. Gather both so
+    // attachments actually parent to animated bones instead of the static root.
+    this.avatar.group.traverse((o) => {
+      add(o);
+      if (o.isSkinnedMesh) for (const b of o.skeleton?.bones ?? []) add(b);
+    });
+    return bones;
+  }
+
+  _refreshBoneOptions() {
+    if (!this._boneSelect) return;
+    const bones = this._avatarBones();
+    this._boneSelect.innerHTML = '';
+    for (const b of bones) {
+      const opt = document.createElement('option');
+      opt.value = b.uuid;
+      opt.textContent = b.name || 'Bone';
+      this._boneSelect.appendChild(opt);
+    }
+    const preferred = bones.find((b) => /head/i.test(b.name)) || bones.find((b) => /spine|chest|neck/i.test(b.name));
+    if (preferred) this._boneSelect.value = preferred.uuid;
+  }
+
+  _selectedBone() {
+    const uuid = this._boneSelect?.value;
+    return this._avatarBones().find((b) => b.uuid === uuid) ?? this.avatar.group;
+  }
+
+  _loadAttachmentFile(file) {
+    if (!/\.(glb|gltf)$/i.test(file.name)) return;
+    const url = URL.createObjectURL(file);
+    this._gltfLoader.load(url, (gltf) => {
+      URL.revokeObjectURL(url);
+      const object = gltf.scene;
+      object.name = file.name.replace(/\.(glb|gltf)$/i, '') || 'Attachment';
+      object.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
+      this._pendingAttachment = { file, object, name: object.name };
+      this._attachSlot.textContent = `Ready: ${object.name}`;
+      this._attachSlot.classList.add('filled');
+    }, undefined, () => {
+      URL.revokeObjectURL(url);
+      this._attachSlot.textContent = 'Failed to load GLB/GLTF';
+    });
+  }
+
+  _attachPending() {
+    if (!this._pendingAttachment) return;
+    this._refreshBoneOptions();
+    const object = this._pendingAttachment.object;
+    const hasSkin = this._hasSkinnedMesh(object);
+    let bone = null;
+    let rigged = false;
+    if (hasSkin) {
+      // Rigged mesh attachment: bind to the avatar's animated bones by
+      // name, but do NOT parent under avatar.group. With external avatar bones,
+      // parenting the skinned mesh under the moving avatar root can double-apply
+      // root motion and make the attachment drift away. Keep it next to the
+      // avatar root and let skinning follow the avatar bones.
+      (this.avatar.group.parent ?? this.avatar.group).add(object);
+      object.position.copy(this.avatar.group.position);
+      object.quaternion.copy(this.avatar.group.quaternion);
+      object.scale.copy(this.avatar.group.scale);
+      object.updateMatrixWorld(true);
+      rigged = this._rigSkinnedAttachment(object);
+    } else {
+      bone = this._selectedBone();
+      bone.updateWorldMatrix(true, false);
+      bone.add(object);
+      // Rigid accessory attachment: parent to the animated bone so it follows the
+      // avatar skeleton. Offsets can be edited later; start snapped to the bone.
+      object.position.set(0, 0, 0);
+      object.quaternion.identity();
+      object.scale.set(1, 1, 1);
+    }
+    object.matrixAutoUpdate = true;
+    object.updateMatrixWorld(true);
+    this._attachments.push({ name: this._pendingAttachment.name, object, bone, rigged });
+    this._pendingAttachment = null;
+    this._attachSlot.textContent = 'Drop GLB/GLTF or click to browse';
+    this._attachSlot.classList.remove('filled');
+    this._refreshAttachmentList();
+  }
+
+  _hasSkinnedMesh(object) {
+    let found = false;
+    object.traverse((child) => { if (child.isSkinnedMesh) found = true; });
+    return found;
+  }
+
+  _rigSkinnedAttachment(object) {
+    const avatarBones = new Map(this._avatarBones().map((b) => [b.name, b]));
+    let rigged = false;
+    object.traverse((child) => {
+      if (!child.isSkinnedMesh || !child.skeleton) return;
+      const srcBones = child.skeleton.bones;
+      const mapped = srcBones.map((b) => avatarBones.get(b.name));
+      if (mapped.some(Boolean)) {
+        const finalBones = mapped.map((b, i) => b ?? srcBones[i]);
+        // Recompute inverse bind matrices from the avatar's current skeleton. The
+        // GLB's inverseBindMatrices are for its source armature and can put the
+        // mesh off to the side when reused with our avatar bones.
+        const skeleton = new THREE.Skeleton(finalBones);
+        skeleton.calculateInverses();
+        // The avatar bones live outside the imported SkinnedMesh hierarchy, so
+        // this must be detached bind mode. In attached mode three assumes the
+        // skeleton shares the mesh root transform, which can leave the mesh near
+        // the leg but not actually driven by the animated avatar armature.
+        child.bindMode = 'detached';
+        child.bind(skeleton, child.matrixWorld.clone());
+        child.skeleton = skeleton;
+        child.frustumCulled = false;
+        rigged = true;
+      }
+    });
+    return rigged;
+  }
+
+  _detachAttachment(item) {
+    item.object.parent?.remove(item.object);
+    const i = this._attachments.indexOf(item);
+    if (i >= 0) this._attachments.splice(i, 1);
+    this._refreshAttachmentList();
+  }
+
+  _refreshAttachmentList() {
+    if (!this._attachList) return;
+    this._attachList.innerHTML = '';
+    if (!this._attachments.length) {
+      const empty = document.createElement('div');
+      empty.className = 'avatar-hint';
+      empty.textContent = 'No attachments.';
+      this._attachList.appendChild(empty);
+      return;
+    }
+    for (const item of this._attachments) {
+      const row = document.createElement('div');
+      row.className = 'avatar-attach-row';
+      const name = document.createElement('span');
+      name.textContent = item.rigged ? `${item.name} → rigged mesh` : `${item.name} → ${item.bone?.name || 'Avatar'}`;
+      const x = document.createElement('button');
+      x.textContent = '×';
+      x.title = 'Detach';
+      x.addEventListener('click', () => this._detachAttachment(item));
+      row.append(name, x);
+      this._attachList.appendChild(row);
+    }
   }
 
   // ---- Appearance tab -------------------------------------------------
