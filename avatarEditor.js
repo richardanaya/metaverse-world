@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { SLIDERS, SEX_PRESETS, PBR_CHANNELS } from 'metaverse-avatar';
 import { showPanel, hidePanel } from './panelFade.js';
 
@@ -44,15 +45,22 @@ function previewDataUrl(image, size = 64) {
 }
 
 export class AvatarEditor {
-  constructor({ avatar, player }) {
+  constructor({ avatar, player, renderer = null, camera = null, controls = null, scene = null }) {
     this.avatar = avatar;
     this.player = player;
+    this.renderer = renderer;
+    this.camera = camera;
+    this.controls = controls;
+    this.scene = scene;
     this.active = false;
     this.sliderState = {};   // id -> t (-1.5..1.5)
     this._inputs = new Map(); // id -> range input (for preset / reset sync)
     this._gltfLoader = new GLTFLoader();
     this._pendingAttachment = null; // { file, object, name }
     this._attachments = [];
+    this._editingAttachment = null;
+    this._attachGizmo = null;
+    this.worldEditor = null;
 
     // One shared hidden file input, re-targeted per upload.
     this._file = document.createElement('input');
@@ -68,10 +76,22 @@ export class AvatarEditor {
     document.body.appendChild(this._attachFile);
 
     this._build();
+    this._buildAttachmentGizmo();
   }
 
   open() { this.active = true; showPanel(this.panel); this.player?.enterPose(); }
-  close() { this.active = false; hidePanel(this.panel); this.player?.exitPose(); }
+  close() { this._stopAttachmentEdit(); this.active = false; hidePanel(this.panel); this.player?.exitPose(); }
+
+  _buildAttachmentGizmo() {
+    if (!this.camera || !this.renderer || !this.scene) return;
+    this._attachGizmo = new TransformControls(this.camera, this.renderer.domElement);
+    this._attachGizmo.setSpace('local');
+    this._attachGizmo.setSize(0.75);
+    this._attachGizmo.addEventListener('dragging-changed', (e) => {
+      if (this.controls) this.controls.enabled = !e.value;
+    });
+    this.scene.add(this._attachGizmo.getHelper());
+  }
 
   _pickFile(onFile) {
     this._file.value = '';
@@ -236,6 +256,18 @@ export class AvatarEditor {
     attach.addEventListener('click', () => this._attachPending());
     pane.appendChild(attach);
 
+    this._attachTools = document.createElement('div');
+    this._attachTools.className = 'avatar-attach-tools';
+    this._attachTools.style.display = 'none';
+    for (const [label, mode] of [['Move', 'translate'], ['Rotate', 'rotate'], ['Scale', 'scale']]) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.dataset.mode = mode;
+      b.addEventListener('click', () => this._setAttachmentEditMode(mode));
+      this._attachTools.appendChild(b);
+    }
+    pane.appendChild(this._attachTools);
+
     this._attachList = document.createElement('div');
     this._attachList.className = 'avatar-attach-list';
     pane.appendChild(this._attachList);
@@ -383,7 +415,44 @@ export class AvatarEditor {
     return rigged;
   }
 
+  _startAttachmentEdit(item) {
+    if (item.rigged) return;
+    if (this.worldEditor?.editExternalAttachment) {
+      this.worldEditor.editExternalAttachment(item);
+      return;
+    }
+    if (!this._attachGizmo) return;
+    this._stopAttachmentEdit();
+    this._editingAttachment = item;
+    this._attachGizmo.attach(item.object);
+    this._attachGizmo.enabled = true;
+    this._attachTools.style.display = 'flex';
+    this._setAttachmentEditMode(this._attachGizmo.getMode?.() ?? 'translate');
+    this.player?.setInputEnabled?.(false);
+    this._refreshAttachmentList();
+  }
+
+  _stopAttachmentEdit() {
+    if (!this._editingAttachment) return;
+    this._attachGizmo?.detach();
+    if (this._attachTools) this._attachTools.style.display = 'none';
+    this._editingAttachment = null;
+    this.player?.setInputEnabled?.(true);
+    if (this.controls) this.controls.enabled = true;
+    this._refreshAttachmentList();
+  }
+
+  _setAttachmentEditMode(mode) {
+    if (!this._attachGizmo) return;
+    this._attachGizmo.setMode(mode);
+    for (const b of this._attachTools?.querySelectorAll('button[data-mode]') ?? []) {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    }
+  }
+
   _detachAttachment(item) {
+    this.worldEditor?.unregisterExternalAttachment?.(item);
+    if (this._editingAttachment === item) this._stopAttachmentEdit();
     item.object.parent?.remove(item.object);
     const i = this._attachments.indexOf(item);
     if (i >= 0) this._attachments.splice(i, 1);
@@ -405,11 +474,21 @@ export class AvatarEditor {
       row.className = 'avatar-attach-row';
       const name = document.createElement('span');
       name.textContent = item.rigged ? `${item.name} → rigged mesh` : `${item.name} → ${item.bone?.name || 'Avatar'}`;
+      const actions = document.createElement('span');
+      actions.className = 'avatar-attach-actions';
+      if (!item.rigged) {
+        const edit = document.createElement('button');
+        edit.textContent = this._editingAttachment === item ? 'Done' : 'Edit';
+        edit.title = 'Edit bone-local transform';
+        edit.addEventListener('click', () => (this._editingAttachment === item ? this._stopAttachmentEdit() : this._startAttachmentEdit(item)));
+        actions.appendChild(edit);
+      }
       const x = document.createElement('button');
       x.textContent = '×';
       x.title = 'Detach';
       x.addEventListener('click', () => this._detachAttachment(item));
-      row.append(name, x);
+      actions.appendChild(x);
+      row.append(name, actions);
       this._attachList.appendChild(row);
     }
   }

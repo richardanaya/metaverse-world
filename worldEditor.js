@@ -483,6 +483,38 @@ export class WorldEditor {
     obj.proxy.updateMatrixWorld(true);
   }
 
+  editExternalAttachment(item) {
+    if (!item?.object || item.rigged) return;
+    let editable = item._worldEditable;
+    if (!editable) {
+      editable = {
+        mesh: item.object,
+        isImported: true,
+        isAttachment: true,
+        name: item.name,
+        attachParent: item.object.parent,
+        proxy: null,
+      };
+      item.object.userData.block = editable;
+      item._worldEditable = editable;
+      this.importedObjects.push(editable);
+    }
+    editable.attachParent = item.object.parent ?? editable.attachParent;
+    this._edit(editable);
+  }
+
+  unregisterExternalAttachment(item) {
+    const editable = item?._worldEditable;
+    if (!editable) return;
+    if (this.selection.includes(editable)) this._deselect();
+    const i = this.importedObjects.indexOf(editable);
+    if (i >= 0) this.importedObjects.splice(i, 1);
+    editable.proxy?.parent?.remove(editable.proxy);
+    editable.proxy?.geometry?.dispose?.();
+    editable.proxy?.material?.dispose?.();
+    item._worldEditable = null;
+  }
+
   _pickAndAddModel(point) {
     this._modelFile.value = '';
     this._modelFile.onchange = () => {
@@ -652,7 +684,7 @@ export class WorldEditor {
     const ordered = this.selection.slice().sort((a, b) => this._depth(a) - this._depth(b));
     for (const b of ordered) {
       this._highlightOff(b);
-      (b.parent ? b.parent.mesh : (b.isImported ? this.scene : this._blocksRoot)).attach(b.mesh);
+      (b.parent ? b.parent.mesh : (b.isAttachment ? (b.attachParent ?? this.scene) : (b.isImported ? this.scene : this._blocksRoot))).attach(b.mesh);
     }
     this.selection = [];
   }
@@ -692,7 +724,7 @@ export class WorldEditor {
   _clearParent(child) {
     if (!child.parent) return;
     child.parent = null;
-    (child.isImported ? this.scene : this._blocksRoot).attach(child.mesh);
+    (child.isAttachment ? (child.attachParent ?? this.scene) : (child.isImported ? this.scene : this._blocksRoot)).attach(child.mesh);
     this._syncEditable(child);
   }
 

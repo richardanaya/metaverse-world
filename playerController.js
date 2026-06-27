@@ -40,6 +40,7 @@ const FLY_SPEED = 4.0, JUMP_HEIGHT = 4.0;
 // Flying forward should clearly outpace running — multiply the (avatar-local)
 // flight speed for horizontal travel, with an extra kick while Shift is held.
 const FLY_FWD_FACTOR = 2.6, FLY_FWD_RUN_FACTOR = 4.2;
+const FLY_ACCEL = 3.8, FLY_DECEL = 5.2; // 1/s smoothing for flight start/stop
 const DOUBLE_TAP = 0.3; // s — second Space within this window stops flight
 // Cutting flight mid-air keeps the horizontal speed you had and arcs forward,
 // bleeding it off at this rate (1/s) until you land (or fully fade in the air).
@@ -82,6 +83,9 @@ export class PlayerController {
     this._lastSpaceAt = null; // last Space keydown time — a quick second tap stops flight
     this._airVelX = 0;       // horizontal velocity carried out of flight (world units/s)
     this._airVelZ = 0;
+    this._flyVelX = 0;       // smoothed flight velocity (world units/s)
+    this._flyVelY = 0;
+    this._flyVelZ = 0;
     this._vy = 0;            // vertical velocity (world units/s)
     this._jumpQueued = false;
     this._jumpForwardBoost = 0; // extra forward m/s along facing, decays in the air
@@ -445,14 +449,14 @@ export class PlayerController {
     if (!this.active || !this.inputEnabled || this.posing || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
     const c = e.code;
     if (down) {
-      if (c === 'KeyF' || c === 'Home') { e.preventDefault(); this.flying = !this.flying; this._vy = 0; this._lastSpaceAt = null; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } return; }
+      if (c === 'KeyF' || c === 'Home') { e.preventDefault(); this.flying = !this.flying; this._vy = 0; this._flyVelX = this._flyVelY = this._flyVelZ = 0; this._lastSpaceAt = null; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } return; }
       // X always toggles crouch. C toggles too (grounded), but also falls through
       // to the movement-key set so it still descends while flying.
       if (c === 'KeyX') { e.preventDefault(); if (!this.flying && this.grounded) this.crouching = !this.crouching; return; }
       if (c === 'KeyC' && !e.repeat && !this.flying && this.grounded) this.crouching = !this.crouching;
       // PgUp/PgDn fly up/down; pressing either while grounded takes off into flight.
       if ((c === 'PageUp' || c === 'PageDown') && !this.flying) {
-        this.flying = true; this._vy = 0; this.crouching = false; this._jumpForwardBoost = 0; this._lastSpaceAt = null;
+        this.flying = true; this._vy = 0; this._flyVelX = this._flyVelY = this._flyVelZ = 0; this.crouching = false; this._jumpForwardBoost = 0; this._lastSpaceAt = null;
       }
       if (c === 'Space') {
         e.preventDefault();
@@ -461,7 +465,7 @@ export class PlayerController {
           if (this.flying) {
             // Double-tap Space stops flying; a lone tap just arms the timer.
             if (this._lastSpaceAt != null && t - this._lastSpaceAt < DOUBLE_TAP) {
-              this.flying = false; this._vy = 0; this._lastSpaceAt = null;
+              this.flying = false; this._vy = 0; this._flyVelX = this._flyVelY = this._flyVelZ = 0; this._lastSpaceAt = null;
             } else { this._lastSpaceAt = t; }
           } else {
             this._lastSpaceAt = t;
@@ -658,7 +662,7 @@ export class PlayerController {
     const inp = this.input;
 
     // ---- gamepad / mobile: toggle flight, crouch ----
-    if (pad.toggleFly) { this.flying = !this.flying; this._vy = 0; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } }
+    if (pad.toggleFly) { this.flying = !this.flying; this._vy = 0; this._flyVelX = this._flyVelY = this._flyVelZ = 0; if (this.flying) { this.crouching = false; this._jumpForwardBoost = 0; } }
     if (pad.toggleCrouch && !this.flying && this.grounded) this.crouching = !this.crouching;
 
     // ---- gamepad A / mobile jump: tap = jump, hold = take off into flight (like keyboard E) ----
@@ -666,7 +670,7 @@ export class PlayerController {
       this._padAAt = now; this._padAConsumed = false;
     }
     if (this._padAAt != null && !this.flying && !this._padAConsumed && now - this._padAAt > E_HOLD) {
-      this.flying = true; this._vy = 0; this.crouching = false; this._jumpForwardBoost = 0; this._padAConsumed = true;
+      this.flying = true; this._vy = 0; this._flyVelX = this._flyVelY = this._flyVelZ = 0; this.crouching = false; this._jumpForwardBoost = 0; this._padAConsumed = true;
     }
     if (!pad.aDown && this._padAAt != null) {
       if (!this.flying && !this._padAConsumed && !this.crouching && this.grounded) this._jumpQueued = true;
@@ -685,6 +689,7 @@ export class PlayerController {
         performance.now() / 1000 - this._ePressedAt > E_HOLD) {
       this.flying = true;
       this._vy = 0;
+      this._flyVelX = this._flyVelY = this._flyVelZ = 0;
       this.crouching = false;
       this._jumpForwardBoost = 0;
       this._lastSpaceAt = null; // don't let a pre-takeoff jump tap count toward stop-flying
@@ -707,8 +712,21 @@ export class PlayerController {
       ? this.flySpeed * (inp.run ? FLY_FWD_RUN_FACTOR : FLY_FWD_FACTOR)
       : this.crouching ? CROUCH_SPEED : inp.run ? this.runSpeed : this.walkSpeed) * S;
     let dx = 0, dz = 0;
-    if (inp.forward) { dx += facing.x * speed * dt * moveMag; dz += facing.z * speed * dt * moveMag; }
-    if (inp.back) { dx -= facing.x * speed * BACK_FACTOR * dt * moveMag; dz -= facing.z * speed * BACK_FACTOR * dt * moveMag; }
+    if (this.flying) {
+      let desiredX = 0, desiredZ = 0;
+      if (inp.forward) { desiredX += facing.x * speed * moveMag; desiredZ += facing.z * speed * moveMag; }
+      if (inp.back) { desiredX -= facing.x * speed * BACK_FACTOR * moveMag; desiredZ -= facing.z * speed * BACK_FACTOR * moveMag; }
+      const hasFlightInput = inp.forward || inp.back;
+      const k = 1 - Math.exp(-(hasFlightInput ? FLY_ACCEL : FLY_DECEL) * dt);
+      this._flyVelX += (desiredX - this._flyVelX) * k;
+      this._flyVelZ += (desiredZ - this._flyVelZ) * k;
+      dx = this._flyVelX * dt;
+      dz = this._flyVelZ * dt;
+    } else {
+      this._flyVelX = 0; this._flyVelY = 0; this._flyVelZ = 0;
+      if (inp.forward) { dx += facing.x * speed * dt * moveMag; dz += facing.z * speed * dt * moveMag; }
+      if (inp.back) { dx -= facing.x * speed * BACK_FACTOR * dt * moveMag; dz -= facing.z * speed * BACK_FACTOR * dt * moveMag; }
+    }
 
     // Horizontal momentum across the flight boundary. While flying, remember the
     // current horizontal velocity; the frame flight ends we keep applying it
@@ -736,7 +754,10 @@ export class PlayerController {
     let dy;
     if (this.flying) {
       this._vy = 0;
-      dy = ((inp.up ? 1 : 0) - (inp.down ? 1 : 0)) * this.flySpeed * S * dt;
+      const desiredY = ((inp.up ? 1 : 0) - (inp.down ? 1 : 0)) * this.flySpeed * S;
+      const k = 1 - Math.exp(-((inp.up || inp.down) ? FLY_ACCEL : FLY_DECEL) * dt);
+      this._flyVelY += (desiredY - this._flyVelY) * k;
+      dy = this._flyVelY * dt;
     } else {
       if (this._jumpQueued && this.grounded) {
         this._vy = Math.sqrt(2 * -this.gravity * this.jumpHeight * S); // v for a jumpHeight hop
@@ -807,6 +828,7 @@ export class PlayerController {
     this.body.setTranslation(spawn, true);
     this.body.setNextKinematicTranslation(spawn);
     this._vy = 0;
+    this._flyVelX = this._flyVelY = this._flyVelZ = 0;
     this.flying = false;
     this.crouching = false;
     this._jumpForwardBoost = 0;

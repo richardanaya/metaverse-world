@@ -177,8 +177,12 @@
     .avatar-attach-slot.drop { border-color: #8fc0ff !important; background: rgba(124,178,221,.18) !important; }
     .avatar-attach-slot.filled { border-color: #6f9bd8 !important; }
     .avatar-attach-bone { width: 100%; padding: 6px; border: 1px solid #3a3f4e; border-radius: 6px; background: #2a2e3a; color: #e8ecf4; }
+    .avatar-attach-tools { display: flex; gap: 4px; }
+    .avatar-attach-tools button { flex: 1; }
+    .avatar-attach-tools button.active { color: var(--accent-2); border-color: var(--accent); background: var(--accent-soft); }
     .avatar-attach-list { display: flex; flex-direction: column; gap: 4px; }
     .avatar-attach-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 6px; border: 1px solid #343a48; border-radius: 6px; background: rgba(8,13,20,.45); font-size: 11px; }
+    .avatar-attach-actions { display: flex; gap: 4px; flex: 0 0 auto; }
     .avatar-attach-row button { flex: 0 0 auto; padding: 2px 7px !important; }
     .avatar-mat-head { display: flex; justify-content: space-between; align-items: center; }
     .avatar-mat-clear {
@@ -1585,7 +1589,7 @@
     const terrainEditor = new TerrainEditor({ renderer, camera, controls, terrain, player });
 
     // Avatar customization (shape sliders + textures/materials, two tabs).
-    const avatarEditor = new AvatarEditor({ avatar, player });
+    const avatarEditor = new AvatarEditor({ avatar, player, renderer, camera, controls, scene });
 
     // BVH / IK animation authoring (right-click avatar → “Create animation…”).
     // Entering it freezes the avatar in a still pose via player.enterPose();
@@ -1624,6 +1628,7 @@
         clear() { this.set([]); },
       },
     });
+    avatarEditor.worldEditor = editor;
 
     // WebRTC multiplayer — copy-paste connection strings, Google STUN.
     const topbarConn = document.getElementById('topbar-conn');
