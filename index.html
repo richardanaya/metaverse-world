@@ -60,6 +60,16 @@
       margin-top: 4px; padding-top: 6px; border-top: 1px solid #3a3f4e;
       max-width: 200px; color: #aeb6c6; font-size: 11px; line-height: 1.5;
     }
+    .block-material-pane { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid #3a3f4e; }
+    .block-material-title { color: #aeb6c6; font: 11px system-ui, sans-serif; }
+    .block-slots { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+    .block-slot { min-width: 28px; min-height: 28px; }
+    .block-material-tint { display: grid; grid-template-columns: 72px 1fr; align-items: center; gap: 5px; color: #aeb6c6; font: 10px system-ui, sans-serif; }
+    .block-material-tint input { width: 100%; height: 24px; padding: 0; border: 1px solid #3a3f4e; background: transparent; }
+    .block-material-sliders { display: flex; flex-direction: column; gap: 5px; }
+    .block-material-slider { display: grid; grid-template-columns: 72px 1fr 30px; align-items: center; gap: 5px; color: #aeb6c6; font: 10px system-ui, sans-serif; }
+    .block-material-slider input { width: 100%; }
+    .block-material-slider b { color: #e8ecf4; font-weight: 600; text-align: right; }
     .edit-pane-hint b { color: #dbe2ee; font-weight: 600; }
     /* Floating terrain editor sidebar */
     .terrain-panel {
@@ -406,14 +416,14 @@
     }
 
     /* ---- texture / material slots ---- */
-    .terrain-slot, .avatar-slot {
+    .terrain-slot, .avatar-slot, .block-slot {
       border: 1px solid var(--line); border-radius: 2px; background: rgba(12,19,28,.7);
     }
-    .terrain-slot:hover, .avatar-slot:hover { border-color: var(--line-2); }
-    .terrain-slot.filled, .avatar-slot.filled {
+    .terrain-slot:hover, .avatar-slot:hover, .block-slot:hover { border-color: var(--line-2); }
+    .terrain-slot.filled, .avatar-slot.filled, .block-slot.filled {
       border-color: var(--accent); box-shadow: 0 0 10px rgba(124,178,221,.25);
     }
-    .terrain-slot.drop, .avatar-slot.drop {
+    .terrain-slot.drop, .avatar-slot.drop, .block-slot.drop {
       border: 1px dashed var(--accent-2); background-color: rgba(124,178,221,.18);
     }
     .terrain-slot-tag, .avatar-slot-tag {

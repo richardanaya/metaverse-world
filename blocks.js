@@ -17,6 +17,25 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 
 const PALETTE = [0xe6584d, 0xf2a83b, 0x4db6ac, 0x7e6bd6, 0x5c8fde, 0x8bc34a];
+const FACE_NAMES = ['right', 'left', 'front', 'back', 'top', 'bottom'];
+
+export const BLOCK_PBR_CHANNELS = [
+  { key: 'map', label: 'Base Color', short: 'ALB', colorSpace: THREE.SRGBColorSpace },
+  { key: 'normalMap', label: 'Normal', short: 'NRM' },
+  { key: 'roughnessMap', label: 'Roughness', short: 'RGH' },
+  { key: 'metalnessMap', label: 'Metallic', short: 'MTL' },
+  { key: 'aoMap', label: 'AO', short: 'AO' },
+];
+
+function defaultFaceMaterialState() {
+  return {
+    tint: '#ffffff',
+    maps: Object.fromEntries(BLOCK_PBR_CHANNELS.map((ch) => [ch.key, null])),
+    values: { normalIntensity: 0, roughness: 1, metalness: 0, aoIntensity: 0, repeatX: 1, repeatY: 1, alpha: 1 },
+  };
+}
+
+export { FACE_NAMES as BLOCK_FACE_NAMES };
 
 // Scratch objects for decomposing a mesh's world matrix when syncing physics.
 const _wp = new THREE.Vector3();
@@ -50,6 +69,8 @@ export class BlockSummoner {
     // you can't just walk up) and its jump height (~0.9*scale, so a hop clears it).
     this.size = 0.7 * this.scale;
     this._geometry = new THREE.BoxGeometry(this.size, this.size, this.size);
+    // aoMap reads uv2 in three.js; mirror the box UVs so uploaded AO works.
+    this._geometry.setAttribute('uv2', new THREE.BufferAttribute(this._geometry.attributes.uv.array, 2));
     this.blocks = []; // { mesh, body, collider }
     this._colorIndex = 0;
   }
@@ -84,11 +105,12 @@ export class BlockSummoner {
       RAPIER.ColliderDesc.cuboid(half, half, half), body,
     );
 
-    const color = PALETTE[this._colorIndex++ % PALETTE.length];
-    const mesh = new THREE.Mesh(
-      this._geometry,
-      new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.0 }),
-    );
+    this._colorIndex++;
+    const materials = FACE_NAMES.map(() => new THREE.MeshStandardMaterial({
+      color: 0xffffff, roughness: 1.0, metalness: 0.0, aoMapIntensity: 0.0,
+    }));
+    const mesh = new THREE.Mesh(this._geometry, materials);
+    mesh.userData.materialState = { kind: 'box-faces', faces: FACE_NAMES.map(() => defaultFaceMaterialState()) };
     mesh.position.set(x, y, z); // local Z-up
     mesh.castShadow = false;
     mesh.receiveShadow = false;
@@ -144,7 +166,8 @@ export class BlockSummoner {
     const block = this.create(_wp.x, _wp.y, _wp.z);
     block.mesh.quaternion.copy(_wq);
     block.mesh.scale.copy(_ws);
-    block.mesh.material.color.copy(m.material.color);
+    block.mesh.userData.materialState = structuredClone(m.userData.materialState ?? { kind: 'box-faces', faces: FACE_NAMES.map(() => defaultFaceMaterialState()) });
+    this.applyMaterialState(block);
     block.mesh.updateMatrixWorld(true);
     this.syncPhysics(block);
     return block;
@@ -156,7 +179,7 @@ export class BlockSummoner {
     this.blocks.splice(i, 1);
     this.world.removeRigidBody(block.body); // also drops its collider
     this.root.remove(block.mesh);
-    block.mesh.material.dispose();
+    this.disposeMaterials(block.mesh.material);
     block.mesh.userData.block = null;
   }
 
@@ -171,7 +194,9 @@ export class BlockSummoner {
         x: p.x, y: p.y, z: p.z,
         qx: q.x, qy: q.y, qz: q.z, qw: q.w,
         sx: s.x, sy: s.y, sz: s.z,
-        color: m.material.color.getHex(),
+        materialState: m.userData.materialState,
+        colors: this.materialsOf(m).map((mat) => mat.color.getHex()),
+        color: this.materialsOf(m)[0]?.color.getHex(),
       };
     });
   }
@@ -194,7 +219,13 @@ export class BlockSummoner {
       const block = this.create(x, y, z);
       block.mesh.quaternion.set(qx, qy, qz, qw);
       block.mesh.scale.set(item.sx ?? 1, item.sy ?? 1, item.sz ?? 1);
-      if (item.color != null) block.mesh.material.color.setHex(item.color);
+      if (item.materialState) {
+        block.mesh.userData.materialState = structuredClone(item.materialState);
+        this.applyMaterialState(block);
+      } else {
+        const colors = Array.isArray(item.colors) ? item.colors : (item.color != null ? [item.color] : null);
+        if (colors) this.materialsOf(block.mesh).forEach((mat, i) => mat.color.setHex(colors[i % colors.length]));
+      }
       block.mesh.updateMatrixWorld(true);
       this.syncPhysics(block);
     }
@@ -202,6 +233,101 @@ export class BlockSummoner {
 
   clear() {
     while (this.blocks.length) this.remove(this.blocks[this.blocks.length - 1]);
+  }
+
+  materialsOf(mesh) { return Array.isArray(mesh.material) ? mesh.material : [mesh.material]; }
+
+  materialAt(block, index = 0) { return this.materialsOf(block.mesh)[THREE.MathUtils.clamp(index, 0, 5)]; }
+
+  materialStateFor(block, index) {
+    const state = block.mesh.userData.materialState ??= { kind: 'box-faces', faces: FACE_NAMES.map(() => defaultFaceMaterialState()) };
+    state.faces ??= FACE_NAMES.map(() => defaultFaceMaterialState());
+    state.faces[index] ??= defaultFaceMaterialState();
+    return state.faces[index];
+  }
+
+  applyMaterialState(block, index = null) {
+    const faces = index == null ? FACE_NAMES.map((_, i) => i) : [index];
+    const oldMats = this.materialsOf(block.mesh);
+    const nextMats = oldMats.slice();
+    for (const i of faces) {
+      const s = this.materialStateFor(block, i);
+      const old = oldMats[i];
+      const alpha = s.values?.alpha ?? 1;
+      const mat = new THREE.MeshStandardMaterial({
+        color: s.tint ?? '#ffffff',
+        roughness: s.values?.roughness ?? 1,
+        metalness: s.values?.metalness ?? 0,
+        aoMapIntensity: s.values?.aoIntensity ?? 0,
+        opacity: alpha,
+        transparent: alpha < 1,
+        depthWrite: alpha >= 1,
+      });
+      if (old?.emissive) mat.emissive.copy(old.emissive); // keep current edit highlight state
+      mat.normalScale.set(s.values?.normalIntensity ?? 0, s.values?.normalIntensity ?? 0);
+      for (const ch of BLOCK_PBR_CHANNELS) {
+        const entry = s.maps?.[ch.key];
+        if (!entry?.url) continue;
+        const tex = new THREE.TextureLoader().load(entry.url, () => {
+          tex.needsUpdate = true;
+          mat.needsUpdate = true;
+          // WebGPU can be slow to notice a newly-loaded texture on a freshly
+          // swapped material array until another object change occurs. Reassign
+          // the array on load so the renderer sees the binding update immediately.
+          block.mesh.material = this.materialsOf(block.mesh).slice();
+          block.mesh.updateMatrixWorld(true);
+        });
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(s.values?.repeatX ?? 1, s.values?.repeatY ?? 1);
+        if (ch.colorSpace) tex.colorSpace = ch.colorSpace;
+        mat[ch.key] = tex;
+      }
+      mat.needsUpdate = true;
+      nextMats[i] = mat;
+    }
+    // Reassign the material array so renderer pipelines/bindings see a concrete
+    // per-face override. Old materials are intentionally not disposed here;
+    // WebGPU may still reference their textures for an in-flight submit.
+    block.mesh.material = nextMats;
+  }
+
+  setMaterialTexture(block, index, channelKey, url, image = null) {
+    const s = this.materialStateFor(block, index);
+    s.maps[channelKey] = url ? { url } : null;
+    if (channelKey === 'normalMap') s.values.normalIntensity = 1;
+    else if (channelKey === 'roughnessMap') s.values.roughness = 1;
+    else if (channelKey === 'metalnessMap') s.values.metalness = 1;
+    else if (channelKey === 'aoMap') s.values.aoIntensity = 1;
+    this.applyMaterialState(block, index);
+
+    // For freshly dropped/picked files, install an already-decoded texture right
+    // away on the rebuilt material. This avoids WebGPU briefly rendering unloaded
+    // TextureLoader maps as black, and makes whole-block edits update all faces
+    // immediately instead of only the first loaded face being visible.
+    if (image) {
+      const mat = this.materialAt(block, index);
+      const ch = BLOCK_PBR_CHANNELS.find((c) => c.key === channelKey);
+      const tex = new THREE.CanvasTexture(image);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(s.values?.repeatX ?? 1, s.values?.repeatY ?? 1);
+      if (ch?.colorSpace) tex.colorSpace = ch.colorSpace;
+      mat[channelKey] = tex;
+      mat.needsUpdate = true;
+      block.mesh.material = this.materialsOf(block.mesh).slice();
+    }
+  }
+
+  copyMaterials(srcMesh, dstMesh) {
+    const src = this.materialsOf(srcMesh);
+    dstMesh.material = src.map((m) => m.clone());
+  }
+
+  disposeMaterials(material) {
+    const mats = Array.isArray(material) ? material : [material];
+    for (const m of mats) {
+      for (const ch of BLOCK_PBR_CHANNELS) m[ch.key]?.dispose?.();
+      m.dispose();
+    }
   }
 
   dispose() {

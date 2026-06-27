@@ -32,9 +32,22 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { showPanel, hidePanel, isPanelOpen } from './panelFade.js';
+import { BLOCK_PBR_CHANNELS, BLOCK_FACE_NAMES } from './blocks.js';
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    if (!file?.type?.startsWith('image/')) { reject(new Error('not an image')); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => resolve({ img, url });
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode failed')); };
+    img.src = url;
+  });
+}
 
 const CLICK_SLOP = 5; // px of pointer travel still counted as a click (not a drag)
 const HIGHLIGHT = 0x335577;
+const MATERIAL_HIGHLIGHT = 0xffcc33;
 // Modal-transform axis directions are derived per-instance from the blocks root
 // (see constructor) so that the X/Y/Z keyboard locks match the Z-up gizmo.
 
@@ -57,6 +70,10 @@ export class WorldEditor {
     this._targets = [];           // blocks whose physics must resync (selection + descendants)
     this._emissive = new Map();   // block -> original emissive hex (to restore highlight)
     this._baseMode = 'translate'; // gizmo mode chosen via the pane
+    this._materialSelectMode = false;
+    this._selectedMaterials = []; // [{ block, index }] selected in material mode
+    this._suppressMaterialHighlight = false; // hide highlight while adjusting material controls
+    this._materialOutlines = [];
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -79,6 +96,13 @@ export class WorldEditor {
     // Modal (keyboard) transform state, null when not transforming.
     this._modal = null;
     this._scaleAnchor = null;     // one-sided gizmo scaling anchor
+
+    // One shared hidden file input for block texture uploads.
+    this._file = document.createElement('input');
+    this._file.type = 'file';
+    this._file.accept = 'image/*';
+    this._file.style.display = 'none';
+    document.body.appendChild(this._file);
 
     // scratch
     this._v = new THREE.Vector3();
@@ -158,6 +182,8 @@ export class WorldEditor {
     make('Move (G)', () => this._setBaseMode('translate'), 'translate');
     make('Rotate (R)', () => this._setBaseMode('rotate'), 'rotate');
     make('Scale (S)', () => this._setBaseMode('scale'), 'scale');
+    this._matModeBtn = make('Select Material', () => this._toggleMaterialSelect(), 'material');
+    this._buildMaterialPane();
     make('Duplicate (Shift+D)', () => this._duplicateAndMove());
     make('Delete (X)', () => this._confirmDeletePopup(), null, 'danger');
     make('Done', () => this._deselect(), null, 'done');
@@ -225,7 +251,7 @@ export class WorldEditor {
       const normal = blockHit.face
         ? blockHit.face.normal.clone().transformDirection(blockHit.object.matrixWorld).normalize()
         : new THREE.Vector3(0, 1, 0);
-      return { type: 'block', block: this.blocks.findByMesh(blockHit.object), point: blockHit.point, normal };
+      return { type: 'block', block: this.blocks.findByMesh(blockHit.object), point: blockHit.point, normal, materialIndex: blockHit.face?.materialIndex ?? 0 };
     }
 
     if (this.avatar && this.raycaster.intersectObject(this.avatar.group, true).length) {
@@ -295,9 +321,13 @@ export class WorldEditor {
     const hit = this._pick(e.clientX, e.clientY);
     if (hit?.type === 'block') {
       if (this.selection.length) {
-        // Already editing: click selects directly; Shift toggles in/out.
-        if (e.shiftKey) this._toggleInSelection(hit.block);
-        else this._selectOnly(hit.block);
+        if (this._materialSelectMode) {
+          this._selectMaterial(hit.block, hit.materialIndex, e.shiftKey);
+        } else {
+          // Already editing: click selects directly; Shift toggles in/out.
+          if (e.shiftKey) this._toggleInSelection(hit.block);
+          else this._selectOnly(hit.block);
+        }
       } else {
         this._blockMenu(hit.block, e.clientX, e.clientY); // offer to edit/delete
       }
@@ -432,6 +462,8 @@ export class WorldEditor {
     this._title.textContent = blocks.length > 1 ? `Edit ${blocks.length} Blocks` : 'Edit Block';
     this._setMode(this._baseMode);
     this.blocks.player?.setInputEnabled(false); // free S / X / G / R for transforms
+    this._updateMaterialHighlights();
+    this._refreshMaterialPane();
   }
 
   // Move the selection's meshes out of the pivot and back under their *real*
@@ -491,27 +523,284 @@ export class WorldEditor {
     hidePanel(this.pane);
     this.orbit.enabled = true;
     this.blocks.player?.setInputEnabled(true);
+    this._selectedMaterials = [];
+    this._clearMaterialOutlines();
+    this._materialSelectMode = false;
   }
 
   _highlightOn(b) {
-    this._emissive.set(b, b.mesh.material.emissive.getHex());
-    b.mesh.material.emissive.setHex(HIGHLIGHT);
+    const mats = this.blocks.materialsOf(b.mesh);
+    this._emissive.set(b, mats.map((m) => m.emissive.getHex()));
+    mats.forEach((m) => m.emissive.setHex(HIGHLIGHT));
   }
 
   _highlightOff(b) {
-    const hex = this._emissive.get(b);
-    if (hex != null) b.mesh.material.emissive.setHex(hex);
+    const hexes = this._emissive.get(b);
+    if (hexes) this.blocks.materialsOf(b.mesh).forEach((m, i) => m.emissive.setHex(hexes[i] ?? 0));
     this._emissive.delete(b);
   }
 
+  _materialKey(block, index) { return `${this.blocks.blocks.indexOf(block)}:${index}`; }
+
+  _updateMaterialHighlights() {
+    this._clearMaterialOutlines();
+    for (const b of this.selection) {
+      const original = this._emissive.get(b) ?? [];
+      // Do not tint/fill selected blocks; selection is shown with outlines only.
+      this.blocks.materialsOf(b.mesh).forEach((m, i) => m.emissive.setHex(original[i] ?? 0));
+    }
+    if (!this._suppressMaterialHighlight) {
+      const selected = this._selectedMaterials.filter(({ block }) => this.selection.includes(block));
+      if (selected.length) {
+        for (const { block, index } of selected) this._addMaterialOutline(block, index);
+      } else {
+        for (const block of this.selection) this._addBlockOutline(block);
+      }
+    }
+  }
+
+  _clearMaterialOutlines() {
+    for (const line of this._materialOutlines) {
+      line.parent?.remove(line);
+      line.geometry.dispose();
+      line.material.dispose();
+    }
+    this._materialOutlines = [];
+  }
+
+  _addBlockOutline(block) {
+    const h = this.blocks.size / 2;
+    const e = h * 0.025;
+    const geo = new THREE.EdgesGeometry(new THREE.BoxGeometry((h + e) * 2, (h + e) * 2, (h + e) * 2));
+    const mat = new THREE.LineBasicMaterial({ color: MATERIAL_HIGHLIGHT, depthTest: false, depthWrite: false, transparent: true, opacity: 1 });
+    const line = new THREE.LineSegments(geo, mat);
+    line.renderOrder = 1000;
+    block.mesh.add(line);
+    this._materialOutlines.push(line);
+
+  }
+
+  _addMaterialOutline(block, index) {
+    const h = this.blocks.size / 2;
+    const e = h * 0.018;
+    const p = [
+      [[ h + e, -h, -h], [ h + e,  h, -h], [ h + e,  h,  h], [ h + e, -h,  h]], // +x
+      [[-h - e,  h, -h], [-h - e, -h, -h], [-h - e, -h,  h], [-h - e,  h,  h]], // -x
+      [[-h,  h + e, -h], [ h,  h + e, -h], [ h,  h + e,  h], [-h,  h + e,  h]], // +y
+      [[ h, -h - e, -h], [-h, -h - e, -h], [-h, -h - e,  h], [ h, -h - e,  h]], // -y
+      [[-h, -h,  h + e], [ h, -h,  h + e], [ h,  h,  h + e], [-h,  h,  h + e]], // +z
+      [[ h, -h, -h - e], [-h, -h, -h - e], [-h,  h, -h - e], [ h,  h, -h - e]], // -z
+    ][index];
+    if (!p) return;
+    const pts = [p[0], p[1], p[1], p[2], p[2], p[3], p[3], p[0]].flat();
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    const mat = new THREE.LineBasicMaterial({ color: MATERIAL_HIGHLIGHT, depthTest: false, depthWrite: false, transparent: true, opacity: 1 });
+    const line = new THREE.LineSegments(geo, mat);
+    line.renderOrder = 1000;
+    block.mesh.add(line);
+    this._materialOutlines.push(line);
+
+    // Add a second, slightly larger white/amber outline to make the selected face
+    // read clearly against bright or busy textures.
+    const geo2 = geo.clone();
+    geo2.scale(1.012, 1.012, 1.012);
+    const mat2 = new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false, transparent: true, opacity: 0.55 });
+    const line2 = new THREE.LineSegments(geo2, mat2);
+    line2.renderOrder = 1001;
+    block.mesh.add(line2);
+    this._materialOutlines.push(line2);
+  }
+
   // ---- gizmo mode -----------------------------------------------------
-  _setBaseMode(mode) { this._baseMode = mode; this._setMode(mode); }
+  _setBaseMode(mode) { this._materialSelectMode = false; this._baseMode = mode; this._setMode(mode); this._updateMaterialHighlights(); }
 
   _setMode(mode) {
-    this.gizmo.setMode(mode);
+    if (mode !== 'material') this.gizmo.setMode(mode);
     for (const b of this.pane.querySelectorAll('button[data-mode]')) {
-      b.classList.toggle('active', b.dataset.mode === mode);
+      b.classList.toggle('active', b.dataset.mode === mode || (b.dataset.mode === 'material' && this._materialSelectMode));
     }
+    this._refreshMaterialPane();
+  }
+
+  _toggleMaterialSelect() {
+    this._materialSelectMode = !this._materialSelectMode;
+    this.gizmo.enabled = !this._materialSelectMode;
+    this._setMode(this._materialSelectMode ? 'material' : this._baseMode);
+  }
+
+  _selectMaterial(block, index, additive = false) {
+    if (!this.selection.includes(block)) return;
+    const key = this._materialKey(block, index);
+    if (additive) {
+      const i = this._selectedMaterials.findIndex((m) => this._materialKey(m.block, m.index) === key);
+      if (i >= 0) this._selectedMaterials.splice(i, 1);
+      else this._selectedMaterials.push({ block, index });
+    } else {
+      this._selectedMaterials = [{ block, index }];
+    }
+    this._updateMaterialHighlights();
+    this._refreshMaterialPane();
+  }
+
+  _buildMaterialPane() {
+    this._matPane = document.createElement('div');
+    this._matPane.className = 'block-material-pane';
+    // While the pointer is over texture/color/slider controls, show the true
+    // material without blue/gold emissive selection tint so edits are easy to judge.
+    this._matPane.addEventListener('pointerenter', () => { this._suppressMaterialHighlight = true; this._updateMaterialHighlights(); });
+    this._matPane.addEventListener('pointerleave', () => { this._suppressMaterialHighlight = false; this._updateMaterialHighlights(); });
+    this.pane.appendChild(this._matPane);
+  }
+
+  _refreshMaterialPane() {
+    if (!this._matPane) return;
+    this._matPane.innerHTML = '';
+    if (!this.selection.length) return;
+    this._selectedMaterials = this._selectedMaterials.filter((m) => this.selection.includes(m.block));
+    const target = this._materialSelectMode && this._selectedMaterials.length
+      ? `Selected: ${this._selectedMaterials.length} material${this._selectedMaterials.length === 1 ? '' : 's'}`
+      : 'Target: All materials';
+    const title = document.createElement('div');
+    title.className = 'block-material-title';
+    title.textContent = target;
+    this._matPane.appendChild(title);
+    const all = document.createElement('button');
+    all.textContent = 'Apply to whole block';
+    all.addEventListener('click', () => { this._selectedMaterials = []; this._updateMaterialHighlights(); this._refreshMaterialPane(); });
+    this._matPane.appendChild(all);
+    const slots = document.createElement('div');
+    slots.className = 'block-slots';
+    for (const ch of BLOCK_PBR_CHANNELS) slots.appendChild(this._makeBlockSlot(ch));
+    this._matPane.appendChild(slots);
+    this._matPane.appendChild(this._makeTintPicker());
+    this._matPane.appendChild(this._makeMaterialSliders());
+  }
+
+  _pickFile(onFile) { this._file.value = ''; this._file.onchange = () => { const f = this._file.files[0]; if (f) onFile(f); }; this._file.click(); }
+
+  _targetMaterialSlots() {
+    const selected = this._selectedMaterials.filter((m) => this.selection.includes(m.block));
+    // Face/material overrides only apply while Select Material mode is active.
+    // In normal Move/Rotate/Scale modes, the material editor targets the whole
+    // selected object(s), even if a face selection from earlier still exists.
+    if (this._materialSelectMode && selected.length) return selected;
+    return this.selection.flatMap((block) => this.blocks.materialsOf(block.mesh).map((_, index) => ({ block, index })));
+  }
+
+  _targetMaterials() { return this._targetMaterialSlots().map(({ block, index }) => this.blocks.materialAt(block, index)); }
+
+  _tintValue() {
+    const mat = this._targetMaterials()[0];
+    return mat ? `#${mat.color.getHexString()}` : '#ffffff';
+  }
+
+  _setTintValue(value) {
+    for (const { block, index } of this._targetMaterialSlots()) {
+      this.blocks.materialStateFor(block, index).tint = value;
+      this.blocks.applyMaterialState(block, index);
+    }
+  }
+
+  _makeTintPicker() {
+    const row = document.createElement('label');
+    row.className = 'block-material-tint';
+    const name = document.createElement('span');
+    name.textContent = 'Tint color';
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = this._tintValue();
+    input.addEventListener('input', () => this._setTintValue(input.value));
+    row.append(name, input);
+    return row;
+  }
+
+  _materialValue(key) {
+    const mats = this._targetMaterials();
+    if (!mats.length) return 0;
+    const m = mats[0];
+    if (key === 'normal') return m.normalMap ? (m.normalScale?.x ?? 1) : 0;
+    if (key === 'roughness') return m.roughnessMap ? (m.roughness ?? 1) : 1;
+    if (key === 'metalness') return m.metalnessMap ? (m.metalness ?? 1) : 0;
+    if (key === 'ao') return m.aoMap ? (m.aoMapIntensity ?? 1) : 0;
+    if (key === 'alpha') return m.opacity ?? 1;
+    if (key === 'texScaleX') return this._firstTexture(m)?.repeat?.x ?? 1;
+    if (key === 'texScaleY') return this._firstTexture(m)?.repeat?.y ?? 1;
+    return 0;
+  }
+
+  _firstTexture(mat) { return BLOCK_PBR_CHANNELS.map((ch) => mat[ch.key]).find(Boolean); }
+
+  _setMaterialValue(key, value) {
+    for (const { block, index } of this._targetMaterialSlots()) {
+      const s = this.blocks.materialStateFor(block, index);
+      if (key === 'normal') s.values.normalIntensity = value;
+      else if (key === 'roughness') s.values.roughness = value;
+      else if (key === 'metalness') s.values.metalness = value;
+      else if (key === 'ao') s.values.aoIntensity = value;
+      else if (key === 'alpha') s.values.alpha = value;
+      else if (key === 'texScaleX') s.values.repeatX = value;
+      else if (key === 'texScaleY') s.values.repeatY = value;
+      this.blocks.applyMaterialState(block, index);
+    }
+  }
+
+  _makeMaterialSliders() {
+    const wrap = document.createElement('div');
+    wrap.className = 'block-material-sliders';
+    const specs = [
+      ['texScaleX', 'Texture scale X', 0.1, 16, 0.1],
+      ['texScaleY', 'Texture scale Y', 0.1, 16, 0.1],
+      ['alpha', 'Alpha', 0, 1, 0.01],
+      ['normal', 'NRM intensity', 0, 3, 0.05],
+      ['roughness', 'RGH amount', 0, 1, 0.01],
+      ['metalness', 'MTL amount', 0, 1, 0.01],
+      ['ao', 'AO intensity', 0, 3, 0.05],
+    ];
+    for (const [key, label, min, max, step] of specs) {
+      const row = document.createElement('label');
+      row.className = 'block-material-slider';
+      const name = document.createElement('span');
+      const val = document.createElement('b');
+      const input = document.createElement('input');
+      input.type = 'range'; input.min = min; input.max = max; input.step = step; input.value = this._materialValue(key);
+      const sync = () => { val.textContent = Number(input.value).toFixed(step < 0.05 ? 2 : 1); };
+      input.addEventListener('input', () => { this._setMaterialValue(key, Number(input.value)); sync(); });
+      name.textContent = label;
+      sync();
+      row.append(name, input, val);
+      wrap.appendChild(row);
+    }
+    return wrap;
+  }
+
+  _makeBlockSlot(ch) {
+    const b = document.createElement('button');
+    b.className = 'avatar-slot block-slot';
+    b.title = ch.label;
+    const tag = document.createElement('span'); tag.className = 'avatar-slot-tag'; tag.textContent = ch.short; b.appendChild(tag);
+    const existing = this._targetMaterials().find((m) => m[ch.key])?.[ch.key];
+    if (existing?.image?.src) { b.style.backgroundImage = `url(${existing.image.src})`; b.classList.add('filled'); }
+    const apply = async (file, targetMats = this._targetMaterialSlots()) => {
+      if (!file?.type?.startsWith('image/')) return;
+      const { img, url } = await loadImage(file);
+      for (const slot of targetMats) this.blocks.setMaterialTexture(slot.block, slot.index, ch.key, url, img);
+      b.style.backgroundImage = `url(${url})`; b.classList.add('filled');
+      this._refreshMaterialPane();
+    };
+    b.addEventListener('click', () => {
+      const targetMats = this._targetMaterialSlots().slice();
+      this._pickFile((file) => apply(file, targetMats));
+    });
+    b.addEventListener('dragover', (e) => { e.preventDefault(); b.classList.add('drop'); });
+    b.addEventListener('dragleave', () => b.classList.remove('drop'));
+    b.addEventListener('drop', (e) => {
+      e.preventDefault();
+      b.classList.remove('drop');
+      const f = e.dataTransfer?.files?.[0];
+      if (f) apply(f, this._targetMaterialSlots().slice());
+    });
+    return b;
   }
 
   // ---- true (hierarchical) parenting ----------------------------------
