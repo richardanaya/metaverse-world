@@ -53,7 +53,7 @@ const MATERIAL_HIGHLIGHT = 0xffcc33;
 // (see constructor) so that the X/Y/Z keyboard locks match the Z-up gizmo.
 
 export class WorldEditor {
-  constructor({ renderer, scene, camera, controls, terrain, blocks, avatar, terrainEditor, avatarEditor, skyEditor, animEditor }) {
+  constructor({ renderer, scene, camera, controls, terrain, blocks, avatar, terrainEditor, avatarEditor, skyEditor, animEditor, outline = null }) {
     this.dom = renderer.domElement;
     this.scene = scene;
     this.camera = camera;
@@ -65,6 +65,7 @@ export class WorldEditor {
     this.avatarEditor = avatarEditor;
     this.skyEditor = skyEditor;
     this.animEditor = animEditor;
+    this.outline = outline;
 
     this.selection = [];          // currently edited objects (blocks or imported models)
     this.importedObjects = [];    // { mesh: Group, isImported, name }
@@ -153,11 +154,26 @@ export class WorldEditor {
     this._buildPane();
 
     this.dom.addEventListener('contextmenu', (e) => this._onContextMenu(e));
-    this.dom.addEventListener('pointerdown', (e) => { if (e.button === 0) this._down = { x: e.clientX, y: e.clientY }; });
+    this.dom.addEventListener('pointerdown', (e) => {
+      // Alt+click/drag is reserved for camera focus/orbit. Temporarily disable
+      // the transform gizmo so OrbitControls can receive the drag without the
+      // gizmo starting a translate/rotate/scale operation.
+      if (e.altKey) {
+        this._altOrbiting = true;
+        this.gizmo.enabled = false;
+        return;
+      }
+      if (e.button === 0) this._down = { x: e.clientX, y: e.clientY };
+    }, true);
     this.dom.addEventListener('pointerup', (e) => this._onPointerUp(e));
     this.dom.addEventListener('pointermove', (e) => this._onPointerMove(e));
     // Capture phase so we can dismiss the popup before other handlers run.
     window.addEventListener('pointerdown', (e) => this._onWindowPointerDown(e), true);
+    window.addEventListener('pointerup', () => {
+      if (!this._altOrbiting) return;
+      this._altOrbiting = false;
+      this.gizmo.enabled = !this._materialSelectMode;
+    }, true);
     window.addEventListener('keydown', (e) => this._onKey(e));
   }
 
@@ -602,6 +618,7 @@ export class WorldEditor {
       hidePanel(this.pane);
       this.orbit.enabled = true;
       this.blocks.player?.setInputEnabled(true);
+      this.outline?.clear?.();
       return;
     }
     if (!blocks.includes(this._active)) this._active = blocks.at(-1);
@@ -724,14 +741,29 @@ export class WorldEditor {
       const mats = b.isImported ? this._objectMaterials(b) : this.blocks.materialsOf(b.mesh);
       mats.forEach((m, i) => m.emissive?.setHex?.(original[i] ?? 0));
     }
+    const outlineTargets = [];
     if (!this._suppressMaterialHighlight) {
       const selected = this._selectedMaterials.filter(({ block }) => this.selection.includes(block));
       if (selected.length) {
-        for (const { block, index, mesh } of selected) this._addMaterialOutline(block, index, mesh);
+        for (const { block, index, mesh } of selected) {
+          if (block.isImported) {
+            outlineTargets.push(mesh ?? block.mesh);
+            if (!this.outline) this._addMaterialOutline(block, index, mesh);
+          } else {
+            // WebGPU OutlineNode can only outline whole objects. For block face
+            // material selection, keep the exact face-edge overlay instead of
+            // outlining the entire cube.
+            this._addMaterialOutline(block, index, mesh);
+          }
+        }
       } else {
-        for (const block of this.selection) this._addBlockOutline(block);
+        for (const block of this.selection) {
+          outlineTargets.push(block.mesh);
+          if (!this.outline) this._addBlockOutline(block);
+        }
       }
     }
+    this.outline?.set?.(outlineTargets);
   }
 
   _clearMaterialOutlines() {
@@ -741,6 +773,7 @@ export class WorldEditor {
       line.material.dispose();
     }
     this._materialOutlines = [];
+    this.outline?.clear?.();
   }
 
   _addBlockOutline(block) {
@@ -954,6 +987,8 @@ export class WorldEditor {
     if (key === 'alpha') return m.opacity ?? 1;
     if (key === 'texScaleX') return this._firstTexture(m)?.repeat?.x ?? 1;
     if (key === 'texScaleY') return this._firstTexture(m)?.repeat?.y ?? 1;
+    if (key === 'texOffsetX') return this._firstTexture(m)?.offset?.x ?? 0;
+    if (key === 'texOffsetY') return this._firstTexture(m)?.offset?.y ?? 0;
     return 0;
   }
 
@@ -970,6 +1005,8 @@ export class WorldEditor {
         else if (key === 'alpha') s.values.alpha = value;
         else if (key === 'texScaleX') s.values.repeatX = value;
         else if (key === 'texScaleY') s.values.repeatY = value;
+        else if (key === 'texOffsetX') s.values.offsetX = value;
+        else if (key === 'texOffsetY') s.values.offsetY = value;
         this.blocks.applyMaterialState(slot.block, slot.index);
       } else {
         const mat = this._slotMaterial(slot);
@@ -979,11 +1016,14 @@ export class WorldEditor {
         else if (key === 'metalness') mat.metalness = value;
         else if (key === 'ao') mat.aoMapIntensity = value;
         else if (key === 'alpha') { mat.opacity = value; mat.transparent = value < 1; mat.depthWrite = value >= 1; }
-        else if (key === 'texScaleX' || key === 'texScaleY') {
+        else if (key === 'texScaleX' || key === 'texScaleY' || key === 'texOffsetX' || key === 'texOffsetY') {
           for (const ch of BLOCK_PBR_CHANNELS) {
             const tex = mat[ch.key]; if (!tex) continue;
             tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-            if (key === 'texScaleX') tex.repeat.x = value; else tex.repeat.y = value;
+            if (key === 'texScaleX') tex.repeat.x = value;
+            else if (key === 'texScaleY') tex.repeat.y = value;
+            else if (key === 'texOffsetX') tex.offset.x = value;
+            else tex.offset.y = value;
             tex.needsUpdate = true;
           }
         }
@@ -996,8 +1036,10 @@ export class WorldEditor {
     const wrap = document.createElement('div');
     wrap.className = 'block-material-sliders';
     const specs = [
-      ['texScaleX', 'Texture scale X', 0.1, 16, 0.1],
-      ['texScaleY', 'Texture scale Y', 0.1, 16, 0.1],
+      ['texScaleX', 'Texture scale X', -16, 16, 0.1],
+      ['texScaleY', 'Texture scale Y', -16, 16, 0.1],
+      ['texOffsetX', 'Texture offset X', -2, 2, 0.01],
+      ['texOffsetY', 'Texture offset Y', -2, 2, 0.01],
       ['alpha', 'Alpha', 0, 1, 0.01],
       ['normal', 'NRM intensity', 0, 3, 0.05],
       ['roughness', 'RGH amount', 0, 1, 0.01],
@@ -1028,6 +1070,8 @@ export class WorldEditor {
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     const first = this._firstTexture(mat);
     tex.repeat.copy(first?.repeat ?? new THREE.Vector2(1, 1));
+    tex.offset.copy(first?.offset ?? new THREE.Vector2(0, 0));
+    tex.needsUpdate = true;
     if (ch.colorSpace) tex.colorSpace = ch.colorSpace;
     mat[ch.key] = tex;
     if (ch.key === 'normalMap') mat.normalScale?.set(1, 1);

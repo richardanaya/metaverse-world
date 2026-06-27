@@ -1088,8 +1088,9 @@
 
   <script type="module">
     import * as THREE from 'three/webgpu';
-    import { color, exp, fog, oneMinus, pass, positionView, saturate, uniform } from 'three/tsl';
+    import { color, exp, fog, oneMinus, pass, positionView, saturate, uniform, time, oscSine } from 'three/tsl';
     import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
+    import { outline } from 'three/addons/tsl/display/OutlineNode.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
     import { Avatar } from 'metaverse-avatar';
@@ -1286,8 +1287,31 @@
       scenePass.getViewZNode(),
       dofFocusDistance, dofFocusRange, dofBokehScale,
     );
+
+    // WebGPU/TSL editor outline pass. WorldEditor owns selectedObjects.
+    const outlineSelectedObjects = [];
+    const outlineEdgeStrength = uniform(3.5);
+    const outlineEdgeGlow = uniform(0.15);
+    const outlineEdgeThickness = uniform(2.0);
+    const outlinePulsePeriod = uniform(0);
+    const outlineVisibleColor = uniform(new THREE.Color(0xffcc33));
+    const outlineHiddenColor = uniform(new THREE.Color(0x6b4b10));
+    const outlinePass = outline(scene, camera, {
+      selectedObjects: outlineSelectedObjects,
+      edgeGlow: outlineEdgeGlow,
+      edgeThickness: outlineEdgeThickness,
+    });
+    const outlineOsc = oscSine(time.div(outlinePulsePeriod).mul(2)).mul(0.5).add(0.5);
+    const outlineColor = outlinePass.visibleEdge.mul(outlineVisibleColor)
+      .add(outlinePass.hiddenEdge.mul(outlineHiddenColor))
+      .mul(outlineEdgeStrength);
+    const outlinePulse = outlinePulsePeriod.greaterThan(0).select(outlineColor.mul(outlineOsc), outlineColor);
+
     const postProcessing = new THREE.PostProcessing(renderer);
-    postProcessing.outputNode = dofNode;
+    const updatePostProcessingOutput = () => {
+      postProcessing.outputNode = outlinePulse.add(dofState.enabled ? dofNode : scenePass.getTextureNode());
+    };
+    updatePostProcessingOutput();
 
     // Per-frame: when auto-focus is on, lock the focus plane to the distance from
     // the camera to its orbit target (the avatar while chasing), and reflect it in
@@ -1363,7 +1387,7 @@
         camera.updateProjectionMatrix();
         fovValue.textContent = `${Math.round(camera.fov)}°`;
       });
-      dofEnabled.addEventListener('change', () => { dofState.enabled = dofEnabled.checked; });
+      dofEnabled.addEventListener('change', () => { dofState.enabled = dofEnabled.checked; updatePostProcessingOutput(); });
       dofAuto.addEventListener('change', () => { dofState.autoFocus = dofAuto.checked; dofFocus.disabled = dofAuto.checked; });
       dofFocus.addEventListener('input', () => {
         dofFocusDistance.value = Number(dofFocus.value);
@@ -1583,6 +1607,15 @@
     const editor = new WorldEditor({
       renderer, scene, camera, controls, terrain, blocks, avatar,
       terrainEditor, avatarEditor, skyEditor, animEditor,
+      outline: {
+        selectedObjects: outlineSelectedObjects,
+        set(objects = []) {
+          outlineSelectedObjects.length = 0;
+          outlineSelectedObjects.push(...objects.filter(Boolean));
+          outlinePass.selectedObjects = outlineSelectedObjects;
+        },
+        clear() { this.set([]); },
+      },
     });
 
     // WebRTC multiplayer — copy-paste connection strings, Google STUN.
@@ -1645,6 +1678,8 @@
       renderer.domElement.addEventListener('pointerdown', (e) => {
         if (e.button !== 0 || !e.altKey) return;
         if (animEditor?.active) return; // animation editor owns the camera while active
+        // Alt+click sets the focus point, but still allow OrbitControls to receive
+        // the drag so users can orbit/look around from that point.
         ndc.x = (e.clientX / innerWidth) * 2 - 1;
         ndc.y = -(e.clientY / innerHeight) * 2 + 1;
         ray.setFromCamera(ndc, camera);
@@ -1654,7 +1689,7 @@
         // recursive: the avatar is a rig of skinned meshes under one group.
         const hit = ray.intersectObjects([terrain.terrainMesh, avatar.group, ...blocks.meshes()], true)[0];
         if (hit) player.setFocusPoint(hit.point);
-      });
+      }, true);
     }
 
     // Escape closes chrome dialogs first, then recenters the camera.
@@ -1746,8 +1781,7 @@
       clouds.update(dt);
       precipitation.update(dt);
       updateDepthOfField();
-      if (dofState.enabled) postProcessing.render();
-      else renderer.render(scene, camera);
+      postProcessing.render();
     });
 
     window.__dbg = { player, avatar, avatarEditor, animEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, renderer, dofPass, beerFogDensity, worldWind, worldSunDirection }; // TEMP debug handle

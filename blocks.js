@@ -31,7 +31,7 @@ function defaultFaceMaterialState() {
   return {
     tint: '#ffffff',
     maps: Object.fromEntries(BLOCK_PBR_CHANNELS.map((ch) => [ch.key, null])),
-    values: { normalIntensity: 0, roughness: 1, metalness: 0, aoIntensity: 0, repeatX: 1, repeatY: 1, alpha: 1 },
+    values: { normalIntensity: 0, roughness: 1, metalness: 0, aoIntensity: 0, repeatX: 1, repeatY: 1, offsetX: 0, offsetY: 0, alpha: 1 },
   };
 }
 
@@ -268,18 +268,25 @@ export class BlockSummoner {
       for (const ch of BLOCK_PBR_CHANNELS) {
         const entry = s.maps?.[ch.key];
         if (!entry?.url) continue;
-        const tex = new THREE.TextureLoader().load(entry.url, () => {
+        const applyTexSettings = (tex) => {
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          tex.repeat.set(s.values?.repeatX ?? 1, s.values?.repeatY ?? 1);
+          tex.offset.set(s.values?.offsetX ?? 0, s.values?.offsetY ?? 0);
+          if (ch.colorSpace) tex.colorSpace = ch.colorSpace;
           tex.needsUpdate = true;
-          mat.needsUpdate = true;
-          // WebGPU can be slow to notice a newly-loaded texture on a freshly
-          // swapped material array until another object change occurs. Reassign
-          // the array on load so the renderer sees the binding update immediately.
-          block.mesh.material = this.materialsOf(block.mesh).slice();
-          block.mesh.updateMatrixWorld(true);
-        });
-        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        tex.repeat.set(s.values?.repeatX ?? 1, s.values?.repeatY ?? 1);
-        if (ch.colorSpace) tex.colorSpace = ch.colorSpace;
+          return tex;
+        };
+        const tex = entry.image
+          ? applyTexSettings(new THREE.CanvasTexture(entry.image))
+          : applyTexSettings(new THREE.TextureLoader().load(entry.url, () => {
+            tex.needsUpdate = true;
+            mat.needsUpdate = true;
+            // WebGPU can be slow to notice a newly-loaded texture on a freshly
+            // swapped material array until another object change occurs. Reassign
+            // the array on load so the renderer sees the binding update immediately.
+            block.mesh.material = this.materialsOf(block.mesh).slice();
+            block.mesh.updateMatrixWorld(true);
+          }));
         mat[ch.key] = tex;
       }
       mat.needsUpdate = true;
@@ -293,7 +300,7 @@ export class BlockSummoner {
 
   setMaterialTexture(block, index, channelKey, url, image = null) {
     const s = this.materialStateFor(block, index);
-    s.maps[channelKey] = url ? { url } : null;
+    s.maps[channelKey] = url ? { url, image } : null;
     if (channelKey === 'normalMap') s.values.normalIntensity = 1;
     else if (channelKey === 'roughnessMap') s.values.roughness = 1;
     else if (channelKey === 'metalnessMap') s.values.metalness = 1;
