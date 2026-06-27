@@ -896,10 +896,10 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
-      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.webgpu.js",
-      "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.tsl.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
+      "three": "https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.webgpu.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.webgpu.js",
+      "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.tsl.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.0/examples/jsm/",
       "metaverse-avatar": "https://cdn.jsdelivr.net/npm/metaverse-avatar@0.2.0/index.js",
       "metaverse-terrain": "https://cdn.jsdelivr.net/npm/metaverse-terrain@0.4.1/index.js",
       "metaverse-sky": "https://cdn.jsdelivr.net/npm/metaverse-sky@0.2.1/index.js",
@@ -1224,6 +1224,7 @@
     // is not wired up here.
     const renderer = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance' });
     await renderer.init();
+    renderer.xr.enabled = true;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1671,6 +1672,7 @@
       multiplayer.setLocalName(trimmed);
     });
     document.getElementById('connect-btn')?.addEventListener('click', () => multiplayer.toggle());
+
 
     const worldIO = new WorldIO({
       terrain, player, avatar, avatarEditor, skyEditor, blocks, renderer,

@@ -617,6 +617,14 @@ export class WorldEditor {
 
   // ---- selection + pivot ----------------------------------------------
   _edit(block) {
+    if (block?.isAttachment) {
+      // Editing a body attachment should put the avatar into its edit/pose mode
+      // so the character is frozen while the bone-local attachment transform is adjusted.
+      this.terrainEditor?.close();
+      this.skyEditor?.close();
+      this.animEditor?.exit();
+      this.avatarEditor?.open();
+    }
     this._baseMode = 'translate';
     this._selectOnly(block);
   }
