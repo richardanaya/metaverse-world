@@ -1501,15 +1501,20 @@ export class WorldEditor {
     const originals = this.selection.slice();
     if (!originals.length) return;
 
-    // Bake the live gizmo/pivot transform back onto each mesh first. While
-    // selected the meshes ride under `_pivot`; if it carries a (possibly
-    // non-uniform) scale or rotation, decomposing their world matrix in
-    // cloneBlock would shear and produce a wrong copy. Releasing re-parents them
-    // to their real parents with a clean per-mesh transform so the clone matches.
+    // Snapshot the exact visible world transforms before releasing the pivot.
+    // This avoids losing scale/rotation that currently lives on the selection
+    // pivot (common after gizmo scaling) when cloning.
+    const snapshots = new Map();
+    for (const o of originals) {
+      o.mesh.updateWorldMatrix(true, true);
+      const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scale = new THREE.Vector3();
+      o.mesh.matrixWorld.decompose(pos, quat, scale);
+      snapshots.set(o, { pos, quat, scale });
+    }
     this._releasePivot();
 
     const map = new Map();
-    for (const o of originals) map.set(o, this.blocks.cloneBlock(o));
+    for (const o of originals) map.set(o, this._cloneEditable(o, snapshots.get(o)));
     for (const o of originals) {
       if (o.parent && map.has(o.parent)) this._setParent(map.get(o), map.get(o.parent));
     }
@@ -1517,6 +1522,54 @@ export class WorldEditor {
     this._active = map.get(this._active) ?? dups.at(-1);
     this._applySelection(dups);
     this._startModal('translate');
+  }
+
+  _cloneEditable(src, snapshot = null) {
+    if (!src?.isImported) {
+      if (!snapshot) return this.blocks.cloneBlock(src);
+      const invRootQ = this._rootQuat.clone().invert();
+      const localPos = snapshot.pos.clone().applyQuaternion(invRootQ);
+      const localQuat = snapshot.quat.clone().premultiply(invRootQ);
+      const block = this.blocks.create(localPos.x, localPos.y, localPos.z);
+      block.mesh.quaternion.copy(localQuat);
+      block.mesh.scale.copy(snapshot.scale);
+      block.mesh.userData.materialState = structuredClone(src.mesh.userData.materialState ?? block.mesh.userData.materialState);
+      if (src.mesh.userData.attachments) block.mesh.userData.attachments = structuredClone(src.mesh.userData.attachments);
+      this.blocks.applyMaterialState(block);
+      block.mesh.updateMatrixWorld(true);
+      this.blocks.syncPhysics(block);
+      return block;
+    }
+
+    src.mesh.updateWorldMatrix(true, true);
+    const cloneMesh = src.mesh.clone(true);
+    cloneMesh.name = `${src.mesh.name || src.name || 'Imported model'} copy`;
+    cloneMesh.userData = structuredClone(src.mesh.userData ?? {});
+
+    const pos = snapshot?.pos ?? this._v;
+    const quat = snapshot?.quat ?? this._q;
+    const scale = snapshot?.scale ?? this._v2;
+    if (!snapshot) src.mesh.matrixWorld.decompose(pos, quat, scale);
+    cloneMesh.position.copy(pos);
+    cloneMesh.quaternion.copy(quat);
+    cloneMesh.scale.copy(scale);
+
+    cloneMesh.traverse((child) => {
+      if (!child.isMesh) return;
+      child.castShadow = true;
+      child.receiveShadow = true;
+      if (Array.isArray(child.material)) child.material = child.material.map((m) => m.clone());
+      else if (child.material) child.material = child.material.clone();
+      child.userData = structuredClone(child.userData ?? {});
+    });
+
+    const editable = { mesh: cloneMesh, isImported: true, name: cloneMesh.name, proxy: null };
+    cloneMesh.userData.block = editable;
+    this.importedObjects.push(editable);
+    this.scene.add(cloneMesh);
+    this._updateImportedProxy(editable);
+    if (src.mesh.userData.attachments) cloneMesh.userData.attachments = structuredClone(src.mesh.userData.attachments);
+    return editable;
   }
 
   // ---- gizmo physics sync + one-sided scaling -------------------------
