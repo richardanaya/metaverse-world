@@ -1171,6 +1171,7 @@
     import { CelestialBodies } from 'metaverse-celestial';
     import { MultiplayerManager } from './multiplayer.js';
     import { WorldIO } from './worldIO.js';
+    import { ProceduralGrass } from './metaverseGrass.js';
     import { resolveAgentName } from './agentName.js';
 
     // CDN-hosted assets that the libraries themselves load (mesh parts, skin
@@ -1553,6 +1554,18 @@
     });
     scene.add(terrain.group);
 
+    // Ghost-of-Tsushima-inspired first pass: procedural instanced grass cards,
+    // restricted to metaverse-terrain's configured grass height band only.
+    const grass = new ProceduralGrass({ scene, terrain, count: 400000, seed: 42, wind: worldWind, animate: false });
+    const emitTerrainHeightmapChange = terrain.emitHeightmapChange.bind(terrain);
+    let grassRebuildTimer = null;
+    terrain.emitHeightmapChange = (...args) => {
+      const result = emitTerrainHeightmapChange(...args);
+      clearTimeout(grassRebuildTimer);
+      grassRebuildTimer = setTimeout(() => grass.rebuild(), 80);
+      return result;
+    };
+
     // ---- avatar -----------------------------------------------------------
     const avatar = await new Avatar().load(AVATAR_MODELS); // ~1.8 m, unscaled
     avatar.group.rotation.y = -Math.PI / 2; // face +Z, the controller's forward
@@ -1563,6 +1576,7 @@
       }
     });
     scene.add(avatar.group);
+    grass.focus = avatar.group;
     avatar.setBlinking(true);
 
     // Directional sunlight: matches the procedural sky sun for direct lighting.
@@ -1834,6 +1848,7 @@
         fpsAccum = 0;
       }
       terrain.update(clock.elapsedTime); // animate the water
+      grass.update(clock.elapsedTime);
       syncEnvironmentLighting();
       avatar.update(dt);                 // pose, physics, blink, look-at
       player.update(dt);                 // movement, grounding, chase camera
@@ -1849,7 +1864,7 @@
       postProcessing.render();
     });
 
-    window.__dbg = { player, avatar, avatarEditor, animEditor, skyEditor, camera, controls, terrain, clouds, precipitation, celestialBodies, sunLight, sunTarget, renderer, dofPass, beerFogDensity, worldWind, worldSunDirection }; // TEMP debug handle
+    window.__dbg = { player, avatar, avatarEditor, animEditor, skyEditor, camera, controls, terrain, grass, clouds, precipitation, celestialBodies, sunLight, sunTarget, renderer, dofPass, beerFogDensity, worldWind, worldSunDirection }; // TEMP debug handle
     // Everything is up — let the boot screen enable its ENTER button.
     window.__bootReady?.();
   </script>
