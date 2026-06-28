@@ -20,6 +20,82 @@ import { showPanel, hidePanel } from './panelFade.js';
 
 const REGION_LABELS = { face: 'Face', upper: 'Upper body', lower: 'Lower body', eyes: 'Eyes' };
 
+const MALE_PRESET_SLIDER_VALUES = {
+  'Height': 18,
+  'Body Thickness': 92,
+  'Head Size': 0,
+  'Face Length': 0,
+  'Face Width': 12,
+  'Forehead Width': 0,
+  'Cheekbone Width': 0,
+  'Ear Size': 0,
+  'Ear Protrusion': 0,
+  'Ear Length': 0,
+  'Ear Point': 0,
+  'Nose Size': 0,
+  'Nose Width': 0,
+  'Nose Bridge': 0,
+  'Nose Tip': 0,
+  'Nose Tilt': 0,
+  'Jaw Width': 79,
+  'Chin Depth': 0,
+  'Cheek Fullness': 0,
+  'Cheekbones': 0,
+  'Cheek Hollows': 0,
+  'Eye Size': 0,
+  'Eye Spacing': 0,
+  'Brow Ridge': 0,
+  'Brow Height': 0,
+  'Brow Angle': 0,
+  'Eye Slant': 0,
+  'Eye Opening': 0,
+  'Upper Lid Fullness': 0,
+  'Left Eye Closed': 0,
+  'Right Eye Closed': 0,
+  'Torso Length': 67,
+  'Shoulders': 38,
+  'Breast Size': -100,
+  'Breast Spacing': 30,
+  'Breast Lift': 0,
+  'Nipple': 0,
+  'Chest Flatten': 100,
+  'Belly Size': 10,
+  'Belly Distension': 0,
+  'Belly Lift': 0,
+  'Waist': 150,
+  'Torso Muscles': 80,
+  'Neck Length': 0,
+  'Neck Thickness': 50,
+  'Arm Length': 0,
+  'Bicep Size': 50,
+  'Forearm Size': 50,
+  'Hand Size': 30,
+  'Palm Width': 50,
+  'Leg Length': 0,
+  'Thigh Muscles': 3,
+  'Calf Muscles': 85,
+  'Butt Size': -17,
+  'Butt Lift': 0,
+  'Hip Width': -38,
+  'Foot Size': 10,
+};
+
+const MALE_PRESET_OVERRIDES = Object.fromEntries(
+  Object.entries(MALE_PRESET_SLIDER_VALUES)
+    .map(([label, value]) => [SLIDERS.find((s) => s.label === label)?.id, value / 100])
+    .filter(([id]) => id),
+);
+
+function solidMap(r, g, b) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 2;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = `rgb(${r},${g},${b})`;
+  ctx.fillRect(0, 0, 2, 2);
+  return canvas;
+}
+
 // Load an <img> from a chosen File (object URL, revoked once decoded).
 // Load an <img> from a chosen File. Resolves { img, url } and keeps the object
 // URL alive (the caller revokes it) so the same URL can back a slot preview.
@@ -121,16 +197,21 @@ export class AvatarEditor {
     this._attachPane = document.createElement('div');
     this._attachPane.className = 'avatar-pane';
     this._attachPane.style.display = 'none';
+    this._physicsPane = document.createElement('div');
+    this._physicsPane.className = 'avatar-pane';
+    this._physicsPane.style.display = 'none';
     const shapeTab = this._tabButton('Shape', tabs, this._shapePane);
     this._tabButton('Appearance', tabs, this._lookPane);
     this._tabButton('Attachments', tabs, this._attachPane);
+    this._tabButton('Physics', tabs, this._physicsPane);
     shapeTab.classList.add('active');
     this.panel.appendChild(tabs);
 
     this._buildShape(this._shapePane);
     this._buildAppearance(this._lookPane);
     this._buildAttachments(this._attachPane);
-    this.panel.append(this._shapePane, this._lookPane, this._attachPane);
+    this._buildPhysics(this._physicsPane);
+    this.panel.append(this._shapePane, this._lookPane, this._attachPane, this._physicsPane);
 
     const done = document.createElement('button');
     done.className = 'avatar-done';
@@ -150,6 +231,7 @@ export class AvatarEditor {
       this._shapePane.style.display = pane === this._shapePane ? 'flex' : 'none';
       this._lookPane.style.display = pane === this._lookPane ? 'flex' : 'none';
       this._attachPane.style.display = pane === this._attachPane ? 'flex' : 'none';
+      this._physicsPane.style.display = pane === this._physicsPane ? 'flex' : 'none';
     });
     tabs.appendChild(b);
     return b;
@@ -218,7 +300,9 @@ export class AvatarEditor {
   }
 
   _applyPreset(sex) {
-    const preset = SEX_PRESETS[sex];
+    const preset = sex === 'male'
+      ? { ...SEX_PRESETS[sex], ...MALE_PRESET_OVERRIDES }
+      : SEX_PRESETS[sex];
     if (!preset) return;
     for (const [id, t] of Object.entries(preset)) {
       this.sliderState[id] = t;
@@ -226,6 +310,8 @@ export class AvatarEditor {
       if (ref) { ref.input.value = Math.round(t * 100); ref.val.textContent = ref.input.value; }
     }
     this.avatar.applyShape(this.sliderState);
+    if (sex === 'male') this._setAvatarSoftPhysics(false);
+    else if (sex === 'female') this._setAvatarSoftPhysics(true);
   }
 
   _reset() {
@@ -476,13 +562,15 @@ export class AvatarEditor {
       name.textContent = item.rigged ? `${item.name} → rigged mesh` : `${item.name} → ${item.bone?.name || 'Avatar'}`;
       const actions = document.createElement('span');
       actions.className = 'avatar-attach-actions';
-      if (!item.rigged) {
-        const edit = document.createElement('button');
-        edit.textContent = this._editingAttachment === item ? 'Done' : 'Edit';
-        edit.title = 'Edit bone-local transform';
-        edit.addEventListener('click', () => (this._editingAttachment === item ? this._stopAttachmentEdit() : this._startAttachmentEdit(item)));
-        actions.appendChild(edit);
-      }
+      const edit = document.createElement('button');
+      edit.textContent = this._editingAttachment === item ? 'Done' : 'Edit';
+      edit.title = item.rigged ? 'Edit materials' : 'Edit bone-local transform and materials';
+      edit.addEventListener('click', () => {
+        if (this._editingAttachment === item) this._stopAttachmentEdit();
+        else if (item.rigged) this.worldEditor?.editExternalAttachment?.(item, { materialsOnly: true });
+        else this._startAttachmentEdit(item);
+      });
+      actions.appendChild(edit);
       const x = document.createElement('button');
       x.textContent = '×';
       x.title = 'Detach';
@@ -490,6 +578,55 @@ export class AvatarEditor {
       actions.appendChild(x);
       row.append(name, actions);
       this._attachList.appendChild(row);
+    }
+  }
+
+  // ---- Physics tab ----------------------------------------------------
+  _buildPhysics(pane) {
+    const hint = document.createElement('div');
+    hint.className = 'avatar-hint';
+    hint.textContent = 'Toggle avatar soft-body physics.';
+    pane.appendChild(hint);
+
+    this._pecPhysicsToggle = this._physicsToggle('Pec physics', this.avatar.pecPhysics);
+    this._glutePhysicsToggle = this._physicsToggle('Glute physics', this.avatar.glutePhysics);
+    pane.appendChild(this._pecPhysicsToggle.row);
+    pane.appendChild(this._glutePhysicsToggle.row);
+  }
+
+  _physicsToggle(label, physics) {
+    const row = document.createElement('label');
+    row.className = 'avatar-check';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = physics?.enabled !== false;
+    const text = document.createElement('span');
+    text.textContent = label;
+    const sync = () => row.classList.toggle('is-off', !input.checked);
+    input.addEventListener('change', () => {
+      if (physics) {
+        physics.enabled = input.checked;
+        if (!input.checked) physics.reset?.();
+      }
+      sync();
+    });
+    sync();
+    row.append(input, text);
+    return { row, input, sync };
+  }
+
+  _setAvatarSoftPhysics(enabled) {
+    for (const item of [
+      { physics: this.avatar.pecPhysics, toggle: this._pecPhysicsToggle },
+      { physics: this.avatar.glutePhysics, toggle: this._glutePhysicsToggle },
+    ]) {
+      if (!item.physics) continue;
+      item.physics.enabled = enabled;
+      if (!enabled) item.physics.reset?.();
+      if (item.toggle) {
+        item.toggle.input.checked = enabled;
+        item.toggle.sync();
+      }
     }
   }
 
@@ -517,15 +654,58 @@ export class AvatarEditor {
       const slots = document.createElement('div');
       slots.className = 'avatar-slots';
       const made = [];
-      for (const ch of PBR_CHANNELS) {
+      const channels = [...PBR_CHANNELS];
+      if (['face', 'upper', 'lower'].includes(region)) {
+        channels.push({ key: 'alphaMask', label: 'Alpha Mask', short: 'A', custom: true });
+      }
+      for (const ch of channels) {
         const slot = this._makeSlot(region, ch);
         slots.appendChild(slot);
         made.push(slot);
       }
-      clr.addEventListener('click', () => made.forEach((slot) => slot.clearMap()));
+      clr.addEventListener('click', () => this._clearRegionMaps(region, made));
       card.appendChild(slots);
       pane.appendChild(card);
     }
+  }
+
+  _clearRegionMaps(region, slots) {
+    const defaults = {
+      metal: solidMap(0, 0, 0),
+      metallic: solidMap(0, 0, 0),
+      roughness: solidMap(255, 255, 255),
+      normal: solidMap(128, 128, 255),
+      nrm: solidMap(128, 128, 255),
+      ao: solidMap(255, 255, 255),
+      ambientOcclusion: solidMap(255, 255, 255),
+    };
+    for (const slot of slots) {
+      const fallback = defaults[slot.channelKey];
+      if (fallback) slot.setGeneratedMap(fallback);
+      else slot.clearMap();
+    }
+  }
+
+  _setAlphaMask(region, img) {
+    const material = this.avatar._regions?.[region]?.material;
+    if (!material) return;
+    material.userData.alphaMaskTexture?.dispose?.();
+    material.userData.alphaMaskTexture = null;
+    if (!img) {
+      material.alphaMap = null;
+      material.transparent = false;
+      material.alphaTest = 0;
+      material.needsUpdate = true;
+      return;
+    }
+    const texture = new THREE.Texture(img);
+    texture.flipY = false;
+    texture.needsUpdate = true;
+    material.alphaMap = texture;
+    material.transparent = true;
+    material.alphaTest = 0.5;
+    material.userData.alphaMaskTexture = texture;
+    material.needsUpdate = true;
   }
 
   // A PBR map slot: click to pick a file, or drag-and-drop an image onto it.
@@ -539,6 +719,7 @@ export class AvatarEditor {
     tag.textContent = ch.short;
     b.appendChild(tag);
 
+    b.channelKey = ch.key;
     b._url = null;
     const showThumb = (src) => { b.style.backgroundImage = src ? `url(${src})` : ''; b.classList.toggle('filled', !!src); };
     const setUrl = (url) => { if (b._url) URL.revokeObjectURL(b._url); b._url = url; showThumb(url); };
@@ -551,7 +732,8 @@ export class AvatarEditor {
     const apply = async (file) => {
       try {
         const { img, url } = await loadImage(file);
-        this.avatar.setSkinMap(region, ch.key, img);
+        if (ch.key === 'alphaMask') this._setAlphaMask(region, img);
+        else this.avatar.setSkinMap(region, ch.key, img);
         setUrl(url); // keep the object URL alive to back the preview
       } catch { /* ignore non-images / decode errors */ }
     };
@@ -566,7 +748,16 @@ export class AvatarEditor {
       if (file) apply(file);
     });
 
-    b.clearMap = () => { this.avatar.setSkinMap(region, ch.key, null); setUrl(null); };
+    b.setGeneratedMap = (img) => {
+      if (ch.key === 'alphaMask') this._setAlphaMask(region, img);
+      else this.avatar.setSkinMap(region, ch.key, img);
+      setUrl(null); b.classList.add('filled');
+    };
+    b.clearMap = () => {
+      if (ch.key === 'alphaMask') this._setAlphaMask(region, null);
+      else this.avatar.setSkinMap(region, ch.key, null);
+      setUrl(null);
+    };
     return b;
   }
 }

@@ -389,43 +389,15 @@ export class WorldEditor {
       return { type: 'block', block: this.blocks.findByMesh(blockHit.object), point: blockHit.point, normal, materialIndex: blockHit.face?.materialIndex ?? 0 };
     }
 
-    // For imported models, try exact mesh hits before the broad edit proxy so
-    // Select Material mode can identify the clicked mesh/material slot.
-    for (const obj of this.importedObjects) obj.mesh.updateWorldMatrix(true, true);
-    const importedHit = this.raycaster.intersectObjects(this.importedObjects.map((o) => o.mesh), true)[0];
-    if (importedHit) {
-      const obj = this._findImportedByChild(importedHit.object);
-      const normal = importedHit.face
-        ? importedHit.face.normal.clone().transformDirection(importedHit.object.matrixWorld).normalize()
-        : new THREE.Vector3(0, 1, 0);
-      return { type: 'imported', block: obj, point: importedHit.point, normal, materialIndex: importedHit.face?.materialIndex ?? 0, mesh: importedHit.object };
-    }
+    // Imported models: use bounding boxes only as a broad-phase candidate filter,
+    // then do exact triangle raycasts on each candidate object. A box hit alone
+    // is never returned as a pick.
+    const importedHit = this._pickImportedExact();
+    if (importedHit) return importedHit;
 
-    for (const obj of this.importedObjects) this._updateImportedProxy(obj);
-    const proxyHit = this.raycaster.intersectObjects(this.importedObjects.map((o) => o.proxy).filter(Boolean), false)[0];
-    if (proxyHit) {
-      const obj = proxyHit.object.userData.importedEditable;
-      const mesh = this._firstImportedMesh(obj);
-      return { type: 'imported', block: obj, point: proxyHit.point, normal: new THREE.Vector3(0, 1, 0), materialIndex: 0, mesh };
-    }
-
-    // Some imported GLB/GLTF assets have unusual nested/skinned/generated geometry
-    // that can miss mesh-level raycasts. Fall back to their world bounding boxes
-    // before testing terrain, so clicks on the model don't pass through to ground.
-    let boxHit = null;
-    for (const obj of this.importedObjects) {
-      const box = new THREE.Box3().setFromObject(obj.mesh);
-      if (box.isEmpty()) continue;
-      const point = this.raycaster.ray.intersectBox(box, new THREE.Vector3());
-      if (!point) continue;
-      const dist = point.distanceTo(this.raycaster.ray.origin);
-      if (!boxHit || dist < boxHit.dist) boxHit = { obj, point, dist };
-    }
-    if (boxHit) return { type: 'imported', block: boxHit.obj, point: boxHit.point, normal: new THREE.Vector3(0, 1, 0), materialIndex: 0, mesh: this._firstImportedMesh(boxHit.obj) };
-
-    const screenHit = this._pickImportedByScreen(clientX, clientY);
-    if (screenHit) return screenHit;
-
+    // Prioritize exact avatar hits before broad imported-object proxies / screen
+    // fallbacks. Otherwise a large imported object's bounding/proxy hit can steal
+    // right-clicks intended for the avatar and open object editing instead.
     if (this.avatar && this.raycaster.intersectObject(this.avatar.group, true).length) {
       return { type: 'avatar' };
     }
@@ -602,6 +574,42 @@ export class WorldEditor {
     return best ? { type: 'imported', block: best.obj, point: best.point, normal: new THREE.Vector3(0, 1, 0), materialIndex: 0 } : null;
   }
 
+  _pickImportedExact() {
+    const candidates = [];
+    for (const obj of this.importedObjects) {
+      obj.mesh.updateWorldMatrix(true, true);
+      const box = new THREE.Box3().setFromObject(obj.mesh);
+      if (box.isEmpty()) continue;
+      const boxPoint = this.raycaster.ray.intersectBox(box, new THREE.Vector3());
+      if (!boxPoint) continue;
+      candidates.push({ obj, dist: boxPoint.distanceTo(this.raycaster.ray.origin) });
+    }
+    candidates.sort((a, b) => a.dist - b.dist);
+
+    let best = null;
+    for (const { obj } of candidates) {
+      this._updateImportedPickProxies(obj);
+      const hits = this.raycaster.intersectObjects(obj.pickProxies ?? [], false);
+      for (const hit of hits) {
+        if (!best || hit.distance < best.hit.distance) best = { obj, hit };
+      }
+    }
+    if (!best) return null;
+    const sourceMesh = best.hit.object.userData.sourceMesh ?? best.hit.object;
+    const normal = best.hit.face
+      ? best.hit.face.normal.clone().transformDirection(best.hit.object.matrixWorld).normalize()
+      : new THREE.Vector3(0, 1, 0);
+    return { type: 'imported', block: best.obj, point: best.hit.point, normal, materialIndex: best.hit.face?.materialIndex ?? 0, mesh: sourceMesh };
+  }
+
+  _prepareImportedMesh(child, source = '') {
+    child.castShadow = true;
+    child.receiveShadow = true;
+    child.geometry?.computeBoundingSphere?.();
+    child.geometry?.computeBoundingBox?.();
+    child.userData.materialState ??= { kind: 'imported-mesh', source, overrides: [] };
+  }
+
   _findImportedByChild(child) {
     return this.importedObjects.find((obj) => {
       for (let o = child; o; o = o.parent) if (o === obj.mesh || o === obj.proxy) return true;
@@ -615,29 +623,37 @@ export class WorldEditor {
     return found;
   }
 
-  _updateImportedProxy(obj) {
-    if (!obj?.mesh) return;
-    obj.mesh.updateWorldMatrix(true, true);
-    const box = new THREE.Box3().setFromObject(obj.mesh);
-    if (box.isEmpty()) return;
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    if (!obj.proxy) {
-      const geo = new THREE.BoxGeometry(1, 1, 1);
-      const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
-      obj.proxy = new THREE.Mesh(geo, mat);
-      obj.proxy.name = `${obj.name || 'Imported'} pick proxy`;
-      obj.proxy.userData.importedEditable = obj;
-      this.scene.add(obj.proxy);
-    }
-    obj.proxy.position.copy(center);
-    obj.proxy.quaternion.identity();
-    obj.proxy.scale.copy(size);
-    obj.proxy.updateMatrixWorld(true);
+  _rebuildImportedPickProxies(obj) {
+    obj.pickProxies = [];
+    obj.mesh?.traverse((source) => {
+      if (!source.isMesh || !source.geometry) return;
+      const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, depthTest: false });
+      mat.colorWrite = false;
+      const proxy = new THREE.Mesh(source.geometry, mat);
+      proxy.name = `${source.name || obj.name || 'Imported'} triangle pick proxy`;
+      proxy.matrixAutoUpdate = false;
+      proxy.userData.importedEditable = obj;
+      proxy.userData.sourceMesh = source;
+      obj.pickProxies.push(proxy);
+    });
   }
 
-  editExternalAttachment(item) {
-    if (!item?.object || item.rigged) return;
+  _updateImportedPickProxies(obj) {
+    if (!obj?.mesh) return;
+    if (!obj.pickProxies) this._rebuildImportedPickProxies(obj);
+    obj.mesh.updateWorldMatrix(true, true);
+    for (const proxy of obj.pickProxies ?? []) {
+      const source = proxy.userData.sourceMesh;
+      if (!source) continue;
+      source.updateWorldMatrix(true, false);
+      proxy.matrixWorld.copy(source.matrixWorld);
+    }
+  }
+
+  _updateImportedProxy(obj) { this._updateImportedPickProxies(obj); }
+
+  editExternalAttachment(item, { materialsOnly = false } = {}) {
+    if (!item?.object || (item.rigged && !materialsOnly)) return;
     let editable = item._worldEditable;
     if (!editable) {
       editable = {
@@ -647,13 +663,39 @@ export class WorldEditor {
         name: item.name,
         attachParent: item.object.parent,
         proxy: null,
+        materialsOnly,
       };
-      item.object.userData.block = editable;
+      item.object.traverse((child) => { if (child.isMesh) this._prepareImportedMesh(child, item.name); });
+      if (!materialsOnly) {
+        item.object.userData.block = editable;
+        this.importedObjects.push(editable);
+      }
       item._worldEditable = editable;
-      this.importedObjects.push(editable);
     }
     editable.attachParent = item.object.parent ?? editable.attachParent;
-    this._edit(editable);
+    editable.materialsOnly = materialsOnly;
+    if (materialsOnly) {
+      const i = this.importedObjects.indexOf(editable);
+      if (i >= 0) this.importedObjects.splice(i, 1);
+      if (item.object.userData.block === editable) item.object.userData.block = null;
+    }
+    if (materialsOnly) this._editMaterialsOnly(editable);
+    else this._edit(editable);
+  }
+
+  _editMaterialsOnly(editable) {
+    this._releasePivot();
+    this.selection = [editable];
+    this._active = editable;
+    this._targets = [];
+    this.gizmo.detach();
+    this.gizmo.enabled = false;
+    showPanel(this.pane);
+    this._title.textContent = 'Edit Attachment Materials';
+    this._setPaneTab?.('properties');
+    this._setMode('material');
+    this._refreshMaterialPane();
+    this.blocks.player?.setInputEnabled(false);
   }
 
   unregisterExternalAttachment(item) {
@@ -684,12 +726,7 @@ export class WorldEditor {
       obj.name = file.name.replace(/\.(glb|gltf)$/i, '') || 'Imported model';
       obj.position.copy(point);
       obj.traverse((child) => {
-        if (child.isMesh) {
-          child.castShadow = true;
-          child.receiveShadow = true;
-          // Seed future per-object/per-material override state without changing imported materials yet.
-          child.userData.materialState ??= { kind: 'imported-mesh', source: file.name, overrides: [] };
-        }
+        if (child.isMesh) this._prepareImportedMesh(child, file.name);
       });
       const editable = { mesh: obj, isImported: true, name: obj.name, proxy: null };
       obj.userData.block = editable; // lets existing edit code treat it block-like
@@ -846,6 +883,7 @@ export class WorldEditor {
     const ordered = this.selection.slice().sort((a, b) => this._depth(a) - this._depth(b));
     for (const b of ordered) {
       this._highlightOff(b);
+      if (b.materialsOnly) continue;
       (b.parent ? b.parent.mesh : (b.isAttachment ? (b.attachParent ?? this.scene) : (b.isImported ? this.scene : this._blocksRoot))).attach(b.mesh);
     }
     this.selection = [];
@@ -1479,7 +1517,8 @@ export class WorldEditor {
   _parent() {
     if (this.selection.length < 2 || !this._active) return;
     const parent = this._active;
-    const children = this.selection.filter((b) => b !== parent && !this._isAncestor(b, parent));
+    if (parent.materialsOnly) return;
+    const children = this.selection.filter((b) => b !== parent && !b.materialsOnly && !this._isAncestor(b, parent));
     const keep = this.selection.slice();
     this._releasePivot();                         // meshes back to real positions first
     for (const c of children) this._setParent(c, parent);
