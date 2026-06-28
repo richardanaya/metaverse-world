@@ -167,6 +167,7 @@ export class BlockSummoner {
     block.mesh.quaternion.copy(_wq);
     block.mesh.scale.copy(_ws);
     block.mesh.userData.materialState = structuredClone(m.userData.materialState ?? { kind: 'box-faces', faces: FACE_NAMES.map(() => defaultFaceMaterialState()) });
+    if (m.userData.attachments) block.mesh.userData.attachments = structuredClone(m.userData.attachments);
     this.applyMaterialState(block);
     block.mesh.updateMatrixWorld(true);
     this.syncPhysics(block);
@@ -195,6 +196,7 @@ export class BlockSummoner {
         qx: q.x, qy: q.y, qz: q.z, qw: q.w,
         sx: s.x, sy: s.y, sz: s.z,
         materialState: m.userData.materialState,
+        attachments: m.userData.attachments,
         colors: this.materialsOf(m).map((mat) => mat.color.getHex()),
         color: this.materialsOf(m)[0]?.color.getHex(),
       };
@@ -219,6 +221,7 @@ export class BlockSummoner {
       const block = this.create(x, y, z);
       block.mesh.quaternion.set(qx, qy, qz, qw);
       block.mesh.scale.set(item.sx ?? 1, item.sy ?? 1, item.sz ?? 1);
+      if (item.attachments) block.mesh.userData.attachments = structuredClone(item.attachments);
       if (item.materialState) {
         block.mesh.userData.materialState = structuredClone(item.materialState);
         this.applyMaterialState(block);

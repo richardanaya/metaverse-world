@@ -56,6 +56,31 @@
     .edit-pane button.active { background: #3a5a8a; border-color: #6f9bd8; }
     .edit-pane button.danger:hover { background: #a23b39; }
     .edit-pane button.done { margin-top: 2px; background: #313846; }
+    .edit-pane-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .edit-pane-tab-body { display: flex; flex-direction: column; gap: 6px; }
+    .edit-pane-tab-body[hidden] { display: none; }
+    .attachment-list { display: flex; flex-direction: column; gap: 6px; max-width: 240px; }
+    .attachment-row { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; color: #dbe2ee; font-size: 12px; }
+    .attachment-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attachment-row button { padding: 6px 8px; }
+    .attachment-dialog-backdrop {
+      position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
+      background: rgba(0,0,0,.62); backdrop-filter: blur(3px);
+    }
+    .attachment-dialog {
+      width: min(1180px, 94vw); height: min(820px, 90vh); display: grid;
+      grid-template-rows: auto auto 1fr auto; gap: 10px; padding: 14px;
+      border: 1px solid #3a3f4e; border-radius: 14px; background: #101620;
+      box-shadow: 0 24px 80px rgba(0,0,0,.55);
+    }
+    .attachment-dialog-header { display: flex; align-items: center; justify-content: space-between; color: #e8ecf4; font-weight: 700; }
+    .attachment-dialog-header button { font-size: 20px; line-height: 1; text-align: center; }
+    .attachment-name-input, .attachment-editor {
+      width: 100%; box-sizing: border-box; border: 1px solid #3a3f4e; border-radius: 8px;
+      background: #141821; color: #e8ecf4; padding: 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .attachment-editor { min-height: 0; resize: none; }
+    .attachment-editor-actions { display: flex; gap: 6px; justify-content: flex-end; }
     .edit-pane-hint {
       margin-top: 4px; padding-top: 6px; border-top: 1px solid #3a3f4e;
       max-width: 200px; color: #aeb6c6; font-size: 11px; line-height: 1.5;
@@ -347,6 +372,32 @@
       color: #fff; background: rgba(190,70,60,.55); border-color: var(--danger); box-shadow: none;
     }
     .edit-pane button.done { background: rgba(14,22,32,.6); }
+    .edit-pane-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .edit-pane-tab-body { display: flex; flex-direction: column; gap: 6px; }
+    .edit-pane-tab-body[hidden] { display: none; }
+    .attachment-list { display: flex; flex-direction: column; gap: 6px; max-width: 240px; }
+    .attachment-row { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; color: var(--bright); font: 11px var(--mono); }
+    .attachment-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attachment-row button { padding: 6px 8px; }
+    .attachment-dialog-backdrop {
+      position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
+      background: rgba(0,0,0,.62); backdrop-filter: blur(3px);
+    }
+    .attachment-dialog {
+      width: min(1180px, 94vw); height: min(820px, 90vh); display: grid;
+      grid-template-rows: auto auto 1fr auto; gap: 10px; padding: 14px;
+      border: 1px solid var(--line); border-radius: 14px;
+      background: linear-gradient(155deg, rgba(13,21,32,.98), rgba(6,10,16,.98));
+      box-shadow: 0 24px 80px rgba(0,0,0,.55);
+    }
+    .attachment-dialog-header { display: flex; align-items: center; justify-content: space-between; color: var(--bright); font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: .12em; }
+    .attachment-dialog-header button { font-size: 20px; line-height: 1; text-align: center; }
+    .attachment-name-input, .attachment-editor {
+      width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px;
+      background: rgba(8,13,20,.75); color: var(--bright); padding: 8px; font: 11px var(--mono);
+    }
+    .attachment-editor { min-height: 0; resize: none; }
+    .attachment-editor-actions { display: flex; gap: 6px; justify-content: flex-end; }
     .terrain-reset { width: 100%; margin-top: 6px; }
     .terrain-check {
       display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 2px 0;

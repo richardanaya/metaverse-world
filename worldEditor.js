@@ -77,6 +77,9 @@ export class WorldEditor {
     this._selectedMaterials = []; // [{ block, index }] selected in material mode
     this._suppressMaterialHighlight = false; // hide highlight while adjusting material controls
     this._materialOutlines = [];
+    this._scriptObjects = new Map(); // mesh.uuid -> editable object
+    this._registeredScriptObjects = new Set();
+    this._scriptWorker = this._createScriptWorker();
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -106,6 +109,13 @@ export class WorldEditor {
     this._file.accept = 'image/*';
     this._file.style.display = 'none';
     document.body.appendChild(this._file);
+
+    this._attachmentFile = document.createElement('input');
+    this._attachmentFile.type = 'file';
+    this._attachmentFile.accept = '.js,.mjs,.ts,.md,text/javascript,text/markdown,text/plain';
+    this._attachmentFile.multiple = true;
+    this._attachmentFile.style.display = 'none';
+    document.body.appendChild(this._attachmentFile);
 
     this._modelFile = document.createElement('input');
     this._modelFile.type = 'file';
@@ -177,6 +187,86 @@ export class WorldEditor {
     window.addEventListener('keydown', (e) => this._onKey(e));
   }
 
+  _createScriptWorker() {
+    const worker = new Worker(new URL('./scriptWorker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = (e) => this._onScriptWorkerMessage(e.data ?? {});
+    return worker;
+  }
+
+  _scriptObjectId(block) { return block?.mesh?.uuid; }
+
+  _registerObjectScripts(block) {
+    const objectId = this._scriptObjectId(block);
+    if (!objectId || !this._scriptWorker) return;
+    this._scriptObjects.set(objectId, block);
+    this._registeredScriptObjects.add(objectId);
+    const scripts = (block.mesh.userData.attachments ?? [])
+      .filter((att) => /\.(js|mjs|ts)$/i.test(att.name ?? '') || /javascript/.test(att.type ?? ''))
+      .map((att) => ({ name: att.name, content: att.content ?? '' }));
+    this._scriptWorker.postMessage({ type: 'register', objectId, scripts });
+  }
+
+  _onScriptWorkerMessage(msg) {
+    if (msg.type === 'command') {
+      const block = this._scriptObjects.get(msg.objectId);
+      if (!block) return;
+      if (msg.command === 'setColor') this._setObjectColor(block, msg.color);
+      else if (msg.command === 'setPosition') this._setObjectPosition(block, msg.value);
+      else if (msg.command === 'setScale') this._setObjectScale(block, msg.value);
+      else if (msg.command === 'setRotation') this._setObjectRotation(block, msg.value);
+    } else if (msg.type === 'error') {
+      console.warn('Object script error', msg);
+    } else if (msg.type === 'log') {
+      console.log(`Object script ${msg.objectId}:`, ...(msg.args ?? []));
+    }
+  }
+
+  _objectTransformState(block) {
+    const m = block.mesh;
+    return {
+      position: [m.position.x, m.position.y, m.position.z],
+      scale: [m.scale.x, m.scale.y, m.scale.z],
+      rotation: [m.quaternion.x, m.quaternion.y, m.quaternion.z, m.quaternion.w],
+    };
+  }
+
+  _validArray(v, n) { return Array.isArray(v) && v.length >= n && v.slice(0, n).every(Number.isFinite); }
+
+  _setObjectPosition(block, v) {
+    if (!this._validArray(v, 3)) return;
+    block.mesh.position.set(v[0], v[1], v[2]);
+    block.mesh.updateMatrixWorld(true);
+    this._syncEditable(block);
+  }
+
+  _setObjectScale(block, v) {
+    if (!this._validArray(v, 3)) return;
+    block.mesh.scale.set(v[0], v[1], v[2]);
+    block.mesh.updateMatrixWorld(true);
+    this._syncEditable(block);
+  }
+
+  _setObjectRotation(block, q) {
+    if (!this._validArray(q, 4)) return;
+    block.mesh.quaternion.set(q[0], q[1], q[2], q[3]).normalize();
+    block.mesh.updateMatrixWorld(true);
+    this._syncEditable(block);
+  }
+
+  _setObjectColor(block, color) {
+    const c = new THREE.Color(color ?? '#ffffff');
+    if (block.isImported) {
+      block.mesh.traverse((m) => {
+        const mats = m.isMesh && m.material ? (Array.isArray(m.material) ? m.material : [m.material]) : [];
+        for (const mat of mats) mat.color?.copy?.(c);
+      });
+    } else {
+      for (const mat of this.blocks.materialsOf(block.mesh)) mat.color?.copy?.(c);
+      const state = block.mesh.userData.materialState;
+      if (state?.faces) for (const face of state.faces) face.tint = `#${c.getHexString()}`;
+    }
+  }
+
   // ---- DOM: cursor popup + left edit pane ------------------------------
   _buildMenu() {
     this.menu = document.createElement('div');
@@ -192,8 +282,25 @@ export class WorldEditor {
 
     this._title = document.createElement('div');
     this._title.className = 'edit-pane-title';
-    this._title.textContent = 'Edit Block';
+    this._title.textContent = 'Edit Object';
     this.pane.appendChild(this._title);
+
+    const tabs = document.createElement('div');
+    tabs.className = 'edit-pane-tabs';
+    this._propertiesTabBtn = document.createElement('button');
+    this._propertiesTabBtn.textContent = 'Properties';
+    this._attachmentsTabBtn = document.createElement('button');
+    this._attachmentsTabBtn.textContent = 'Attachments';
+    tabs.append(this._propertiesTabBtn, this._attachmentsTabBtn);
+    this.pane.appendChild(tabs);
+
+    this._propertiesTab = document.createElement('div');
+    this._propertiesTab.className = 'edit-pane-tab-body';
+    this._attachmentsTab = document.createElement('div');
+    this._attachmentsTab.className = 'edit-pane-tab-body';
+    this.pane.append(this._propertiesTab, this._attachmentsTab);
+    this._propertiesTabBtn.addEventListener('click', () => this._setPaneTab('properties'));
+    this._attachmentsTabBtn.addEventListener('click', () => this._setPaneTab('attachments'));
 
     const make = (label, fn, mode, cls) => {
       const b = document.createElement('button');
@@ -201,7 +308,7 @@ export class WorldEditor {
       if (mode) b.dataset.mode = mode;
       if (cls) b.className = cls;
       b.addEventListener('click', fn);
-      this.pane.appendChild(b);
+      this._propertiesTab.appendChild(b);
       return b;
     };
     make('Move (G)', () => this._setBaseMode('translate'), 'translate');
@@ -213,6 +320,9 @@ export class WorldEditor {
     make('Delete (X)', () => this._confirmDeletePopup(), null, 'danger');
     make('Done', () => this._deselect(), null, 'done');
 
+    this._buildAttachmentsPane();
+    this._setPaneTab('properties');
+
     const hint = document.createElement('div');
     hint.className = 'edit-pane-hint';
     hint.innerHTML = [
@@ -222,7 +332,7 @@ export class WorldEditor {
       '<b>Shift+D</b> duplicate',
       '<b>Ctrl+P</b> parent to active (last-clicked) · <b>Ctrl+Shift+P</b> unparent',
     ].map((l) => `<div>${l}</div>`).join('');
-    this.pane.appendChild(hint);
+    this._propertiesTab.appendChild(hint);
 
     document.body.appendChild(this.pane);
   }
@@ -369,7 +479,27 @@ export class WorldEditor {
   _onPointerMove(e) {
     this._ptr.x = e.clientX;
     this._ptr.y = e.clientY;
-    if (this._modal) this._modalApply();
+    if (this._modal) { this._modalApply(); return; }
+    this._updateScriptHoverCursor(e.clientX, e.clientY);
+  }
+
+  _hasClickableScript(block) {
+    return (block?.mesh?.userData?.attachments ?? []).some((att) => {
+      const isScript = /\.(js|mjs|ts)$/i.test(att.name ?? '') || /javascript/.test(att.type ?? '');
+      return isScript && /\bonClick\s*\(/.test(att.content ?? '');
+    });
+  }
+
+  _updateScriptHoverCursor(clientX, clientY) {
+    if (this.gizmo?.dragging || this._materialSelectMode || this._modal) return;
+    const hit = this._pick(clientX, clientY);
+    const clickable = (hit?.type === 'block' || hit?.type === 'imported') && this._hasClickableScript(hit.block);
+    this.dom.style.cursor = clickable ? 'pointer' : '';
+  }
+
+  _refreshScriptHoverCursor() {
+    this.dom.style.cursor = '';
+    this._updateScriptHoverCursor(this._ptr.x, this._ptr.y);
   }
 
   _onPointerUp(e) {
@@ -387,6 +517,7 @@ export class WorldEditor {
     const hit = this._pick(e.clientX, e.clientY);
     if (hit?.type === 'block' || hit?.type === 'imported') {
       if (e.altKey) { this._focusOrbitOn(hit.block); return; }
+      this._sendScriptClick(hit, e);
       if (this.selection.length) {
         if (this._materialSelectMode) {
           this._selectMaterial(hit.block, hit.materialIndex, e.shiftKey, hit.mesh);
@@ -396,11 +527,33 @@ export class WorldEditor {
           else this._selectOnly(hit.block);
         }
       } else {
-        this._blockMenu(hit.block, e.clientX, e.clientY); // offer to edit/delete
+        this._hideMenu();
       }
     } else {
       this._hideMenu();
     }
+  }
+
+  _sendScriptClick(hit, e) {
+    const objectId = this._scriptObjectId(hit.block);
+    if (!objectId || !this._scriptWorker) return;
+    if (!this._registeredScriptObjects.has(objectId)) this._registerObjectScripts(hit.block);
+    this._scriptObjects.set(objectId, hit.block);
+    this._scriptWorker.postMessage({
+      type: 'click',
+      objectId,
+      event: {
+        objectId,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        shiftKey: e.shiftKey,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        point: hit.point ? [hit.point.x, hit.point.y, hit.point.z] : null,
+      },
+      state: this._objectTransformState(hit.block),
+    });
   }
 
   _onWindowPointerDown(e) {
@@ -678,11 +831,12 @@ export class WorldEditor {
     this._computeTargets();
     this.gizmo.attach(this._pivot);
     showPanel(this.pane);
-    this._title.textContent = blocks.length > 1 ? `Edit ${blocks.length} Blocks` : 'Edit Block';
+    this._title.textContent = blocks.length > 1 ? `Edit ${blocks.length} Objects` : 'Edit Object';
     this._setMode(this._baseMode);
     this.blocks.player?.setInputEnabled(false); // free S / X / G / R for transforms
     this._updateMaterialHighlights();
     this._refreshMaterialPane();
+    this._refreshAttachmentsPane();
   }
 
   // Move the selection's meshes out of the pivot and back under their *real*
@@ -929,7 +1083,172 @@ export class WorldEditor {
     // material without blue/gold emissive selection tint so edits are easy to judge.
     this._matPane.addEventListener('pointerenter', () => { this._suppressMaterialHighlight = true; this._updateMaterialHighlights(); });
     this._matPane.addEventListener('pointerleave', () => { this._suppressMaterialHighlight = false; this._updateMaterialHighlights(); });
-    this.pane.appendChild(this._matPane);
+    (this._propertiesTab ?? this.pane).appendChild(this._matPane);
+  }
+
+  _setPaneTab(tab) {
+    this._activePaneTab = tab;
+    this._propertiesTab.hidden = tab !== 'properties';
+    this._attachmentsTab.hidden = tab !== 'attachments';
+    this._propertiesTabBtn.classList.toggle('active', tab === 'properties');
+    this._attachmentsTabBtn.classList.toggle('active', tab === 'attachments');
+    if (tab === 'attachments') this._refreshAttachmentsPane();
+  }
+
+  _buildAttachmentsPane() {
+    const intro = document.createElement('div');
+    intro.className = 'edit-pane-hint';
+    intro.textContent = 'Attach script files or markdown notes to the selected object.';
+    this._attachmentsTab.appendChild(intro);
+    const add = document.createElement('button');
+    add.textContent = '+ Attach files';
+    add.addEventListener('click', () => this._pickAttachments());
+    this._attachmentsTab.appendChild(add);
+    const createScript = document.createElement('button');
+    createScript.textContent = '+ New script';
+    createScript.addEventListener('click', () => this._createAttachment('script.js', 'text/javascript', `// Runs in a worker when this object is clicked.\n// Vectors are [x, y, z]; rotations are quaternions [x, y, z, w].\nlet raised = false;\nfunction onClick(event) {\n  mvLog('clicked', event);\n  const p = mvGetPosition();\n  mvSetPosition([p[0], p[1], p[2] + (raised ? -0.5 : 0.5)]);\n  raised = !raised;\n}\n`));
+    this._attachmentsTab.appendChild(createScript);
+    const createMarkdown = document.createElement('button');
+    createMarkdown.textContent = '+ New markdown';
+    createMarkdown.addEventListener('click', () => this._createAttachment('notes.md', 'text/markdown', '# Notes\n'));
+    this._attachmentsTab.appendChild(createMarkdown);
+    this._attachmentList = document.createElement('div');
+    this._attachmentList.className = 'attachment-list';
+    this._attachmentsTab.appendChild(this._attachmentList);
+  }
+
+  _attachmentsFor(block = this._active) {
+    if (!block) return [];
+    return block.mesh.userData.attachments ??= [];
+  }
+
+  _createAttachment(name, type, content = '') {
+    if (!this._active) return;
+    const attachments = this._attachmentsFor();
+    attachments.push({ name, type, size: content.length, content, addedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    this._refreshAttachmentsPane();
+    this._editAttachment(attachments.length - 1);
+  }
+
+  _pickAttachments() {
+    if (!this._active) return;
+    this._attachmentFile.value = '';
+    this._attachmentFile.onchange = async () => {
+      const files = [...this._attachmentFile.files];
+      const accepted = files.filter((f) => /\.(js|mjs|ts|md)$/i.test(f.name) || /javascript|markdown|plain/.test(f.type));
+      const attachments = this._attachmentsFor();
+      for (const file of accepted) attachments.push({ name: file.name, type: file.type || 'text/plain', size: file.size, content: await file.text(), addedAt: new Date().toISOString() });
+      this._registerObjectScripts(this._active);
+      this._refreshAttachmentsPane();
+    };
+    this._attachmentFile.click();
+  }
+
+  _editAttachment(index) {
+    const attachments = this._attachmentsFor();
+    const att = attachments[index];
+    if (!att) return;
+    this._closeAttachmentDialog?.();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'attachment-dialog-backdrop';
+    const dialog = document.createElement('div');
+    dialog.className = 'attachment-dialog';
+    overlay.appendChild(dialog);
+
+    const header = document.createElement('div');
+    header.className = 'attachment-dialog-header';
+    const title = document.createElement('div');
+    title.textContent = 'Edit Attachment';
+    const close = document.createElement('button');
+    close.textContent = '×';
+    close.title = 'Close';
+    header.append(title, close);
+
+    const name = document.createElement('input');
+    name.className = 'attachment-name-input';
+    name.value = att.name ?? '';
+    name.placeholder = 'filename.js or notes.md';
+
+    const editor = document.createElement('textarea');
+    editor.className = 'attachment-editor';
+    editor.value = att.content ?? '';
+    editor.spellcheck = false;
+
+    const actions = document.createElement('div');
+    actions.className = 'attachment-editor-actions';
+    const save = document.createElement('button');
+    save.textContent = 'Save';
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Cancel';
+    actions.append(save, cancel);
+    dialog.append(header, name, editor, actions);
+
+    const closeDialog = () => {
+      window.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+      this._closeAttachmentDialog = null;
+      this._refreshAttachmentsPane();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeDialog(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); e.stopPropagation(); save.click(); }
+    };
+    this._closeAttachmentDialog = closeDialog;
+
+    overlay.addEventListener('pointerdown', (e) => e.stopPropagation(), true);
+    overlay.addEventListener('keydown', (e) => e.stopPropagation(), true);
+    close.addEventListener('click', closeDialog);
+    cancel.addEventListener('click', closeDialog);
+    save.addEventListener('click', () => {
+      att.name = name.value.trim() || att.name || 'attachment.txt';
+      att.type = /\.md$/i.test(att.name) ? 'text/markdown' : 'text/javascript';
+      att.content = editor.value;
+      att.size = editor.value.length;
+      att.updatedAt = new Date().toISOString();
+      this._registerObjectScripts(this._active);
+      closeDialog();
+      this._refreshScriptHoverCursor();
+    });
+
+    document.body.appendChild(overlay);
+    window.addEventListener('keydown', onKey, true);
+    editor.focus();
+  }
+
+  _refreshAttachmentsPane() {
+    if (!this._attachmentList) return;
+    this._attachmentList.innerHTML = '';
+    if (!this.selection.length) { this._attachmentList.textContent = ''; return; }
+    if (this.selection.length > 1) { this._attachmentList.textContent = 'Select one object to manage attachments.'; return; }
+    const attachments = this._attachmentsFor();
+    if (!attachments.length) {
+      const empty = document.createElement('div');
+      empty.className = 'edit-pane-hint';
+      empty.textContent = 'No attachments yet.';
+      this._attachmentList.appendChild(empty);
+      return;
+    }
+    attachments.forEach((att, i) => {
+      const row = document.createElement('div');
+      row.className = 'attachment-row';
+      const name = document.createElement('span');
+      name.textContent = `${att.name} (${Math.ceil((att.size ?? att.content?.length ?? 0) / 1024)} KB)`;
+      const edit = document.createElement('button');
+      edit.textContent = 'Edit';
+      edit.addEventListener('click', () => this._editAttachment(i));
+      const remove = document.createElement('button');
+      remove.textContent = 'Remove';
+      remove.className = 'danger';
+      remove.addEventListener('click', () => {
+        attachments.splice(i, 1);
+        this._registerObjectScripts(this._active);
+        this._refreshAttachmentsPane();
+        this._refreshScriptHoverCursor();
+      });
+      row.append(name, edit, remove);
+      this._attachmentList.appendChild(row);
+    });
   }
 
   _refreshMaterialPane() {
